@@ -11,7 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let store = PasswordStore::from_env()?;
 
-    println!("{}", store.read_password("test_password").await?);
+    println!("{:?}", store.write_password("bbb/ccc/test_password", "aaaaa".as_bytes().to_owned()).await?);
 
     Ok(())
 }
