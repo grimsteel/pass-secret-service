@@ -4,6 +4,7 @@ use std::{fmt::Display, io};
 pub enum Error {
     IoError(io::Error),
     DbusError(zbus::Error),
+    RedbError(redb::Error),
     GpgError(String),
     // pass is not initialized
     NotInitialized
@@ -21,12 +22,19 @@ impl From<zbus::Error> for Error {
     }
 }
 
+impl From<redb::Error> for Error {
+    fn from(value: redb::Error) -> Self {
+        Self::RedbError(value)
+    }
+}
+
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::IoError(e) => write!(f, "I/O Error: {e}"),
             Error::DbusError(e) => write!(f, "D-Bus Error: {e}"),
             Error::GpgError(e) => write!(f, "GPG Error; {e}"),
+            Error::RedbError(e) => write!(f, "ReDB Error: {e}"),
             Error::NotInitialized => write!(f, "Pass is not initialized"),
         }
     }

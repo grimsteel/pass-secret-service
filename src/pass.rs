@@ -4,7 +4,7 @@ use tokio::{fs::{read, read_dir, read_to_string, DirBuilder, File, OpenOptions},
 use crate::error::{Error, Result};
 
 pub struct PasswordStore {
-    directory: PathBuf,
+    pub directory: PathBuf,
     gpg_opts: Option<String>,
     file_mode: u32,
     dir_mode: u32
