@@ -1,8 +1,8 @@
-use std::{borrow::Cow, collections::HashMap, path::Path, sync::{Arc, RwLock}};
+use std::{borrow::Cow, collections::HashMap, path::Path, sync::Arc};
 
 use nanoid::nanoid;
 use redb::{Database, MultimapTableDefinition, ReadableTable, TableDefinition};
-use tokio::task::spawn_blocking;
+use tokio::{task::spawn_blocking, sync::RwLock};
 
 use crate::{error::Result, pass::PasswordStore};
 
@@ -96,7 +96,7 @@ impl SecretStore {
 
         // initialize the default store if necessary
         if !has_default_collection {
-            store.create_collection(Some("Default".into()), Some("default".into()));
+            store.create_collection(Some("Default".into()), Some("default".into())).await?;
         }
 
         Ok(store)
@@ -142,18 +142,18 @@ impl SecretStore {
             let mut table = tx.open_table(ALIASES_TABLE)?;
 
             if let Some(target) = target {
-                table.insert(alias.as_str(), target.as_str());
+                table.insert(alias.as_str(), target.as_str())?;
             } else {
                 // remove it
-                table.remove(alias.as_str());
+                table.remove(alias.as_str())?;
             }
             
             Ok(())
         }).await.unwrap()?)
     }
 
-    pub fn collections(&self) -> Vec<String> {
-        self.collection_dbs.read().unwrap()
+    pub async fn collections(&self) -> Vec<String> {
+        self.collection_dbs.read().await
             .keys()
             .map(|a| a.to_owned())
             .collect()
@@ -181,7 +181,7 @@ impl SecretStore {
                     // update the label if we were given one or there isn't one already
                     // in the 2nd case, it just becomes Untitled Collection
                     if had_provided_label || labels.get(id)?.is_none() {
-                        labels.insert(id, label.as_ref());
+                        labels.insert(id, label.as_ref())?;
                     }
                     
                     Some(id.to_string())
@@ -204,12 +204,12 @@ impl SecretStore {
 
             drop(aliases);
             drop(labels);
-            tx.commit();
+            tx.commit()?;
 
             Ok(id)
         }).await.unwrap()?;
 
-        let mut collections = self.collection_dbs.write().unwrap();
+        let mut collections = self.collection_dbs.write().await;
 
         if !collections.contains_key(&collection_id) {
             // we need to actually create this collection
@@ -229,7 +229,7 @@ impl SecretStore {
     pub async fn search_all_collections(&self, attributes: HashMap<String, String>) -> Result<Vec<String>> {
         let collections = self.collection_dbs.clone();
         Ok(spawn_blocking(move || -> RedbResult<_> {
-            let cols = collections.read().unwrap();
+            let cols = collections.blocking_read();
             cols.iter()
                 .map(|(id, db)| {
                     // search each collection

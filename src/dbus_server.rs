@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use zbus::{fdo, interface, object_server::SignalContext, zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value}, Connection, ObjectServer};
+use zbus::{fdo, interface, object_server::SignalContext, zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Type, Value}, Connection, ObjectServer};
 
 use crate::{error::Result, secret_store::{slugify, SecretStore}};
 
 const EMPTY_PATH: ObjectPath = ObjectPath::from_static_str_unchecked("/");
 
-struct Service {
+pub struct Service {
     store: SecretStore,
     connection: Connection
 }
@@ -16,15 +16,13 @@ struct Item;
 struct Session;
 struct Prompt;
 
-type DBusResult<T> = fdo::Result<T>;
-
 #[interface(name = "org.freedesktop.Secret.Service")]
 impl Service {
     async fn open_session(&self, algorithm: String, input: OwnedValue) -> (Value, ObjectPath) {
         ("".into(), EMPTY_PATH)
     }
 
-    async fn create_collection(&self, properties: HashMap<String, OwnedValue>, alias: String) -> DBusResult<(ObjectPath, ObjectPath)> {
+    async fn create_collection(&self, properties: HashMap<String, OwnedValue>, alias: String) -> fdo::Result<(ObjectPath, ObjectPath)> {
         let label: Option<String> = properties
             .get("org.freedesktop.Secret.Collection.Label")
             .and_then(|v| v.downcast_ref().ok());
@@ -38,7 +36,7 @@ impl Service {
         Ok((collection_path, EMPTY_PATH))
     }
 
-    async fn search_items(&self, attributes: HashMap<String, String>) -> DBusResult<(Vec<ObjectPath>, Vec<ObjectPath>)> {
+    async fn search_items(&self, attributes: HashMap<String, String>) -> fdo::Result<(Vec<ObjectPath>, Vec<ObjectPath>)> {
         let items = self.store.search_all_collections(attributes).await?;
         let paths = items
             .into_iter()
@@ -58,7 +56,7 @@ impl Service {
         (vec![], EMPTY_PATH)
     }
 
-    async fn read_alias(&self, name: String) -> DBusResult<ObjectPath> {
+    async fn read_alias(&self, name: String) -> fdo::Result<ObjectPath> {
         let alias = slugify(&name);
         
         if let Some(target) = self.store
@@ -71,7 +69,7 @@ impl Service {
         }
     }
 
-    async fn set_alias(&self, name: String, collection: OwnedObjectPath) -> DBusResult<()> {
+    async fn set_alias(&self, name: String, collection: OwnedObjectPath) -> fdo::Result<()> {
         let alias = slugify(&name);
         
         let collection = collection.as_ref();
@@ -86,7 +84,7 @@ impl Service {
 
     #[zbus(property)]
     async fn collections(&self) -> Vec<ObjectPath> {
-        self.store.collections()
+        self.store.collections().await
             .into_iter()
             .filter_map(|v| v.try_into().ok())
             .collect()

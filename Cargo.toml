@@ -7,5 +7,6 @@ edition = "2021"
 libc = "0.2.155"
 nanoid = "0.4.0"
 redb = "2.1.1"
+serde = "1.0.204"
 tokio = { version = "1.38.1", features = ["fs", "rt", "rt-multi-thread", "macros", "process"] }
 zbus = { version = "4.3.1", default-features = false, features = ["tokio"] }
