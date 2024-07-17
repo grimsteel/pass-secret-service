@@ -1,19 +1,23 @@
+use dbus_server::init_service;
 use pass::PasswordStore;
 use zbus::Connection;
 
-mod pass;
-mod error;
-mod secret_store;
 mod dbus_server;
+mod error;
+mod pass;
+mod secret_store;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    //let connection = Connection::session().await?;
-    //connection.request_name("org.freedesktop.secrets").await?;
+    let connection = Connection::session().await?;
+    
+    let service = init_service(connection.clone()).await?;
 
-    let store = PasswordStore::from_env()?;
+    connection.object_server().at("/org/freedesktop/secrets", service).await?;
 
-    println!("{:?}", store.write_password("bbb/ccc/test_password", "aaaaa".as_bytes().to_owned()).await?);
+    connection.request_name("org.freedesktop.secrets").await?;
 
-    Ok(())
+    loop {
+        std::future::pending::<()>().await;
+    }
 }

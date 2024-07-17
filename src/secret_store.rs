@@ -20,6 +20,8 @@ const ALIASES_TABLE: TableDefinition<&str, &str> = TableDefinition::new("aliases
 const PASS_SUBDIR: &'static str = "secret-service";
 const ATTRIBUTES_DB: &'static str = "attributes.db";
 
+type RedbResult<T> = std::result::Result<T, redb::Error>;
+
 /// open a db contained within the given PasswordStore
 async fn open_db(pass: &PasswordStore, path: impl AsRef<Path>) -> Result<Database> {
     let db_file = pass.open_file(path).await?
@@ -52,9 +54,28 @@ pub fn slugify(string: &str) -> String {
     unsafe { String::from_utf8_unchecked(slugified) }
 }
 
+/// search a collection for the given attributes
+/// returns a vec of secret IDs
+pub fn search_collection(attrs: &HashMap<String, String>, db: &Database) -> RedbResult<Vec<String>> {
+    let tx = db.begin_read()?;
+    let table = match tx.open_multimap_table(ATTRIBUTES_TABLE) {
+        Ok(t) => t,
+        // table does not exist yet - that's ok
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(vec![]),
+        Err(e) => return Err(e.into())
+    };
+    let mut results = vec![];
+    for (k, v) in attrs {
+        // I'm not sure if results need to match ALL k/vs or just one
+        let items = table.get((k.as_str(), v.as_str()))?;
+        results.extend(items.filter_map(|item| Some(item.ok()?.value().to_string())));
+    }
+    Ok(results)
+}
+
 pub struct SecretStore {
     pass: PasswordStore,
-    collection_dbs: RwLock<HashMap<String, Database>>,
+    collection_dbs: Arc<RwLock<HashMap<String, Database>>>,
     db: Arc<Database>
 }
 
@@ -69,7 +90,7 @@ impl SecretStore {
         
         let store = Self {
             pass,
-            collection_dbs: RwLock::new(collections),
+            collection_dbs: Arc::new(RwLock::new(collections)),
             db: Arc::new(db)
         };
 
@@ -99,7 +120,7 @@ impl SecretStore {
 
     pub async fn get_alias(&self, alias: String) -> Result<Option<String>> {
         let db = self.db.clone();
-        Ok(spawn_blocking(move || -> std::result::Result<_, redb::Error> {
+        Ok(spawn_blocking(move || -> RedbResult<_> {
             // open the aliases table
             let tx = db.begin_read()?;
             let table = match tx.open_table(ALIASES_TABLE) {
@@ -115,7 +136,7 @@ impl SecretStore {
     
     pub async fn set_alias(&self, alias: String, target: Option<String>) -> Result {
         let db = self.db.clone();
-        Ok(spawn_blocking(move || -> std::result::Result<_, redb::Error> {
+        Ok(spawn_blocking(move || -> RedbResult<_> {
             // open the aliases table
             let tx = db.begin_write()?;
             let mut table = tx.open_table(ALIASES_TABLE)?;
@@ -144,7 +165,7 @@ impl SecretStore {
 
         let db = self.db.clone();
 
-        let collection_id = spawn_blocking(move || -> std::result::Result<_, redb::Error> {
+        let collection_id = spawn_blocking(move || -> RedbResult<_> {
             let tx = db.begin_write()?;
             let mut aliases = tx.open_table(ALIASES_TABLE)?;
             let mut labels = tx.open_table(LABELS_TABLE)?;
@@ -203,5 +224,20 @@ impl SecretStore {
         }
 
         Ok(collection_id)
+    }
+
+    pub async fn search_all_collections(&self, attributes: HashMap<String, String>) -> Result<Vec<String>> {
+        let collections = self.collection_dbs.clone();
+        Ok(spawn_blocking(move || -> RedbResult<_> {
+            let cols = collections.read().unwrap();
+            cols.iter()
+                .map(|(id, db)| {
+                    // search each collection
+                    search_collection(&attributes, db)
+                        // append the collection ID to each result
+                        .map(|i| i.into_iter().map(|i| format!("{id}/{i}")).collect())
+                })
+                .collect()
+        }).await.unwrap()?)
     }
 }
