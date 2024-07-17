@@ -1,6 +1,6 @@
-use std::{collections::HashMap, fmt::Display};
+use std::{collections::HashMap, fmt::Display, sync::Arc};
 
-use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::{sync::mpsc::{self, Receiver, Sender}, task};
 use zbus::{
     fdo, interface,
     object_server::SignalContext,
@@ -28,18 +28,22 @@ fn try_interface<T>(result: zbus::Result<T>) -> zbus::Result<Option<T>> {
     }
 }
 
+enum Message {
+    CollectionDeleted(Arc<String>)
+}
+
 #[derive(Debug)]
 pub struct Service<'a> {
     store: SecretStore<'a>,
     connection: Connection,
-    collection_channel: (Sender<()>, Receiver<()>)
+    collection_channel: Sender<Message>
 }
 
 #[derive(Clone, Debug)]
 struct Collection<'a> {
-    tx: Sender<()>,
+    tx: Sender<Message>,
     store: SecretStore<'a>,
-    name: String
+    id: Arc<String>
 }
 
 struct Item;
@@ -50,7 +54,7 @@ impl Service<'static> {
     pub async fn init(connection: Connection, pass: &'static PasswordStore) -> Result<Self> {
         let store = SecretStore::new(pass).await?;
         // setup the collection channel
-        let collection_channel = mpsc::channel(4);
+        let (tx, mut rx) = mpsc::channel(4);
 
         {
             let object_server = connection.object_server();
@@ -70,30 +74,55 @@ impl Service<'static> {
 
             // add existing collections
             for collection in store.collections().await {
-                let c = Collection { tx: collection_channel.0.clone(), store: store.clone(), name: collection.clone() };
+                let collection_aliases = aliases_reverse.remove(&collection).into_iter().flatten();
+                let path = collection_path(&collection).unwrap();
+                
+                let c = Collection { tx: tx.clone(), store: store.clone(), id: Arc::new(collection) };
 
                 // add the aliases
-                for alias in aliases_reverse.remove(&collection).into_iter().flatten() {
+                for alias in collection_aliases {
                     let path = alias_path(alias).unwrap();
                     object_server.at(path, c.clone()).await?;
                 }
 
-                let path = collection_path(collection).unwrap();
                 object_server.at(path, c).await?;
 
                 // TODO: items
             }
         }
+
+        let connection_2 = connection.clone();
+
+        task::spawn(async move {
+            // Handle notifications from the collections
+            let signal_context = SignalContext::new(&connection_2, "/org/freedesktop/secrets")?;
+            let object_server = connection_2.object_server();
+            
+            while let Some(msg) = rx.recv().await {
+                match msg {
+                    Message::CollectionDeleted(collection_id) => {
+                        if let Some(path) = collection_path(collection_id) {
+                            // remove the collection
+                            try_interface(object_server.remove::<Collection, _>(&path).await)?;
+                            // emit the signal
+                            Self::collection_deleted(&signal_context, path).await?;
+                        }
+                    }
+                }
+            }
+
+            zbus::Result::Ok(())
+        });
         
         Ok(Service {
             store,
             connection,
-            collection_channel
+            collection_channel: tx
         })
     }
 
     fn make_collection(&self, name: String) -> Collection<'static> {
-        Collection { tx: self.collection_channel.0.clone(), name, store: self.store.clone() }
+        Collection { tx: self.collection_channel.clone(), id: Arc::new(name), store: self.store.clone() }
     }
 }
 
@@ -240,7 +269,49 @@ impl Service<'static> {
 
 #[interface(name = "org.freedesktop.Secret.Collection")]
 impl Collection<'static> {
-    
+    async fn delete(&self) -> ObjectPath {
+        // notify the service
+        let _ = self.tx.send(Message::CollectionDeleted(self.id.clone())).await;
+        
+        EMPTY_PATH
+    }
+
+    async fn search_items(
+        &self,
+        attributes: HashMap<String, String>,
+    ) -> fdo::Result<Vec<ObjectPath>> {
+        let items = self.store.search_collection(self.id.clone(), attributes).await?;
+        let paths = items
+            .into_iter()
+            .filter_map(collection_path)
+            .collect();
+
+        Ok(paths)
+    }
+
+    async fn create_item(
+        &self,
+        properties: HashMap<String, OwnedValue>,
+        secret: (),
+        replace: bool
+    ) -> fdo::Result<(ObjectPath, ObjectPath)> {
+        todo!()
+    }
+
+    #[zbus(property)]
+    async fn items(&self) -> Vec<ObjectPath> {
+        todo!()
+    }
+
+    #[zbus(property)]
+    async fn label(&self) -> fdo::Result<String> {
+        Ok(self.store.get_label(self.id.clone()).await?.unwrap_or_else(|| "Untitled Collection".into()))
+    }
+    #[zbus(property)]
+    async fn set_label(&self, label: String) -> fdo::Result<()> {
+        self.store.set_label(self.id.clone(), label).await?;
+        Ok(())
+    }
 }
 
 #[interface(name = "org.freedesktop.Secret.Item")]

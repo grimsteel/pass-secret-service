@@ -127,6 +127,34 @@ impl<'a> SecretStore<'a> {
         Ok(collections)
     }
 
+    pub async fn get_label(&self, collection_id: Arc<String>) -> Result<Option<String>> {
+        let db = self.db.clone();
+        Ok(spawn_blocking(move || -> RedbResult<_> {
+            let tx = db.begin_read()?;
+            let table = match tx.open_table(LABELS_TABLE) {
+                Ok(t) => t,
+                // table does not exist yet - that's ok
+                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+                Err(e) => return Err(e.into()),
+            };
+            Ok(table.get(collection_id.as_str())?.map(|a| a.value().into()))
+        })
+           .await
+           .unwrap()?)
+    }
+
+    pub async fn set_label(&self, collection_id: Arc<String>, label: String) -> Result {
+        let db = self.db.clone();
+        Ok(spawn_blocking(move || -> RedbResult<_> {
+            let tx = db.begin_write()?;
+            let mut table = tx.open_table(LABELS_TABLE)?;
+            table.insert(collection_id.as_str(), &*label)?;
+            Ok(())
+        })
+           .await
+           .unwrap()?)
+    }
+
     pub async fn aliases(&self) -> Result<HashMap<String, String>> {
         let db = self.db.clone();
         Ok(spawn_blocking(move || -> RedbResult<_> {
@@ -294,4 +322,22 @@ impl<'a> SecretStore<'a> {
         .await
         .unwrap()?)
     }
+
+    pub async fn search_collection(
+        &self,
+        collection_id: Arc<String>,
+        attributes: HashMap<String, String>,
+    ) -> Result<Vec<String>> {
+        let collections = self.collection_dbs.clone();
+        Ok(spawn_blocking(move || {
+            let cols = collections.blocking_read();
+            if let Some(db) = cols.get(collection_id.as_ref()) {
+                search_collection(&attributes, db)
+            } else {
+                Ok(vec![])
+            }
+        })
+        .await
+        .unwrap()?)
+    }   
 }
