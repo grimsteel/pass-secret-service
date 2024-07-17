@@ -1,31 +1,91 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
 
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use zbus::{
     fdo, interface,
     object_server::SignalContext,
-    zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Type, Value},
-    Connection, ObjectServer,
+    zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value},
+    Connection,
 };
 
 use crate::{
-    error::Result,
-    secret_store::{slugify, SecretStore},
+    error::Result, pass::PasswordStore, secret_store::{slugify, SecretStore}
 };
 
 const EMPTY_PATH: ObjectPath = ObjectPath::from_static_str_unchecked("/");
 
-pub struct Service {
-    store: SecretStore,
-    connection: Connection,
+fn collection_path<'a, 'b, T: Display>(collection_id: T) -> Option<ObjectPath<'b>> {
+    ObjectPath::try_from(format!("/org/freedesktop/secrets/collection/{collection_id}")).ok()
+}
+fn alias_path<'a, 'b, T: Display>(alias: T) -> Option<ObjectPath<'b>> {
+    ObjectPath::try_from(format!("/org/freedesktop/secrets/aliases/{alias}")).ok()
 }
 
-struct Collection;
+#[derive(Debug)]
+pub struct Service<'a> {
+    store: SecretStore<'a>,
+    connection: Connection,
+    collection_rx: Receiver<()>
+}
+
+#[derive(Clone, Debug)]
+struct Collection {
+    tx: Sender<()>
+}
+
 struct Item;
 struct Session;
 struct Prompt;
 
+impl<'a> Service<'a> {
+    pub async fn init(connection: Connection, pass: &'a PasswordStore) -> Result<Self> {
+        let store = SecretStore::new(pass).await?;
+        // setup the collection channel
+        let (collection_tx, collection_rx) = mpsc::channel(4);
+
+        {
+            let object_server = connection.object_server();
+
+            let aliases = store.aliases().await?;
+            let mut aliases_reverse = aliases.into_iter()
+                .fold(HashMap::<String, Vec<String>>::new(), |mut map, (alias, target)| {
+                    {
+                        if let Some(items) = map.get_mut(&alias) {
+                            items.push(target);
+                        } else {
+                            map.insert(alias, vec![target]);
+                        }
+                    }
+                    map
+                });
+
+            // add existing collections
+            for collection in store.collections().await {
+                let c = Collection { tx: collection_tx.clone() };
+
+                // add the aliases
+                for alias in aliases_reverse.remove(&collection).into_iter().flatten() {
+                    let path = alias_path(alias).unwrap();
+                    object_server.at(path, c.clone()).await?;
+                }
+
+                let path = collection_path(collection).unwrap();
+                object_server.at(path, c).await?;
+
+                // TODO: items
+            }
+        }
+        
+        Ok(Service {
+            store,
+            connection,
+            collection_rx
+        })
+    }
+}
+
 #[interface(name = "org.freedesktop.Secret.Service")]
-impl Service {
+impl Service<'static> {
     async fn open_session(&self, algorithm: String, input: OwnedValue) -> (Value, ObjectPath) {
         ("".into(), EMPTY_PATH)
     }
@@ -35,16 +95,17 @@ impl Service {
         properties: HashMap<String, OwnedValue>,
         alias: String,
     ) -> fdo::Result<(ObjectPath, ObjectPath)> {
+        // stringify the labelg
         let label: Option<String> = properties
             .get("org.freedesktop.Secret.Collection.Label")
             .and_then(|v| v.downcast_ref().ok());
 
+        // slugify the alias and handle the case where it's empty
         let alias = slugify(&alias);
         let alias = if alias == "" { None } else { Some(alias) };
 
         let id = self.store.create_collection(label, alias).await?;
-        let collection_path =
-            ObjectPath::try_from(format!("/org/freedesktop/secrets/collection/{id}")).unwrap();
+        let collection_path = collection_path(id).unwrap();
 
         Ok((collection_path, EMPTY_PATH))
     }
@@ -56,9 +117,7 @@ impl Service {
         let items = self.store.search_all_collections(attributes).await?;
         let paths = items
             .into_iter()
-            .filter_map(|i| {
-                ObjectPath::try_from(format!("/org/freedesktop/secrets/collection/{i}")).ok()
-            })
+            .filter_map(collection_path)
             .collect();
         // we don't support locking
         Ok((paths, vec![]))
@@ -77,9 +136,9 @@ impl Service {
     async fn read_alias(&self, name: String) -> fdo::Result<ObjectPath> {
         let alias = slugify(&name);
 
-        if let Some(target) = self.store.get_alias(alias).await?.and_then(|v| {
-            ObjectPath::try_from(format!("/org/freedesktop/secrets/collection/{v}")).ok()
-        }) {
+        if let Some(target) = self.store.get_alias(alias).await?
+            .as_ref().and_then(collection_path)
+        {
             Ok(target)
         } else {
             Ok(EMPTY_PATH)
@@ -126,7 +185,9 @@ impl Service {
 }
 
 #[interface(name = "org.freedesktop.Secret.Collection")]
-impl Collection {}
+impl Collection {
+    
+}
 
 #[interface(name = "org.freedesktop.Secret.Item")]
 impl Item {}
@@ -136,10 +197,3 @@ impl Session {}
 
 #[interface(name = "org.freedesktop.Secret.Prompt")]
 impl Prompt {}
-
-pub async fn init_service(connection: Connection) -> Result<Service> {
-    Ok(Service {
-        store: SecretStore::new().await?,
-        connection,
-    })
-}

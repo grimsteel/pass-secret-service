@@ -78,16 +78,16 @@ pub fn search_collection(
     Ok(results)
 }
 
-pub struct SecretStore {
-    pass: PasswordStore,
+#[derive(Debug, Clone)]
+pub struct SecretStore<'a> {
+    pass: &'a PasswordStore,
     collection_dbs: Arc<RwLock<HashMap<String, Database>>>,
     db: Arc<Database>,
 }
 
-impl SecretStore {
-    pub async fn new() -> Result<Self> {
-        let pass = PasswordStore::from_env()?;
-        let collections = Self::get_current_collections(&pass).await?;
+impl<'a> SecretStore<'a> {
+    pub async fn new(pass: &'a PasswordStore) -> Result<Self> {
+        let collections = Self::get_current_collections(pass).await?;
 
         let has_default_collection = collections.contains_key("default");
 
@@ -125,6 +125,28 @@ impl SecretStore {
         }
 
         Ok(collections)
+    }
+
+    pub async fn aliases(&self) -> Result<HashMap<String, String>> {
+        let db = self.db.clone();
+        Ok(spawn_blocking(move || -> RedbResult<_> {
+            // open the aliases table
+            let tx = db.begin_read()?;
+            let table = match tx.open_table(ALIASES_TABLE) {
+                Ok(t) => t,
+                // table does not exist yet - that's ok
+                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(HashMap::new()),
+                Err(e) => return Err(e.into()),
+            };
+            table.iter()?
+                .map(|i| {
+                    let (k, v) = i?;
+                    Ok((k.value().into(), v.value().into()))
+                })
+                .collect()
+        })
+           .await
+           .unwrap()?)
     }
 
     pub async fn get_alias(&self, alias: String) -> Result<Option<String>> {

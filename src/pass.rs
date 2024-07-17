@@ -14,6 +14,7 @@ use tokio::{
 
 use crate::error::{Error, Result};
 
+#[derive(Debug)]
 pub struct PasswordStore {
     pub directory: PathBuf,
     gpg_opts: Option<String>,

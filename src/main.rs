@@ -1,4 +1,4 @@
-use dbus_server::init_service;
+use dbus_server::Service;
 use pass::PasswordStore;
 use zbus::Connection;
 
@@ -9,9 +9,11 @@ mod secret_store;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let pass = Box::leak(Box::new(PasswordStore::from_env()?));
+    
     let connection = Connection::session().await?;
 
-    let service = init_service(connection.clone()).await?;
+    let service = Service::init(connection.clone(), pass).await?;
 
     connection
         .object_server()
