@@ -20,28 +20,37 @@ fn collection_path<'a, 'b, T: Display>(collection_id: T) -> Option<ObjectPath<'b
 fn alias_path<'a, 'b, T: Display>(alias: T) -> Option<ObjectPath<'b>> {
     ObjectPath::try_from(format!("/org/freedesktop/secrets/aliases/{alias}")).ok()
 }
+fn try_interface<T>(result: zbus::Result<T>) -> zbus::Result<Option<T>> {
+    match result {
+        Ok(v) => Ok(Some(v)),
+        Err(zbus::Error::InterfaceNotFound) => Ok(None),
+        Err(e) => Err(e)
+    }
+}
 
 #[derive(Debug)]
 pub struct Service<'a> {
     store: SecretStore<'a>,
     connection: Connection,
-    collection_rx: Receiver<()>
+    collection_channel: (Sender<()>, Receiver<()>)
 }
 
 #[derive(Clone, Debug)]
-struct Collection {
-    tx: Sender<()>
+struct Collection<'a> {
+    tx: Sender<()>,
+    store: SecretStore<'a>,
+    name: String
 }
 
 struct Item;
 struct Session;
 struct Prompt;
 
-impl<'a> Service<'a> {
-    pub async fn init(connection: Connection, pass: &'a PasswordStore) -> Result<Self> {
+impl Service<'static> {
+    pub async fn init(connection: Connection, pass: &'static PasswordStore) -> Result<Self> {
         let store = SecretStore::new(pass).await?;
         // setup the collection channel
-        let (collection_tx, collection_rx) = mpsc::channel(4);
+        let collection_channel = mpsc::channel(4);
 
         {
             let object_server = connection.object_server();
@@ -61,7 +70,7 @@ impl<'a> Service<'a> {
 
             // add existing collections
             for collection in store.collections().await {
-                let c = Collection { tx: collection_tx.clone() };
+                let c = Collection { tx: collection_channel.0.clone(), store: store.clone(), name: collection.clone() };
 
                 // add the aliases
                 for alias in aliases_reverse.remove(&collection).into_iter().flatten() {
@@ -79,8 +88,12 @@ impl<'a> Service<'a> {
         Ok(Service {
             store,
             connection,
-            collection_rx
+            collection_channel
         })
+    }
+
+    fn make_collection(&self, name: String) -> Collection<'static> {
+        Collection { tx: self.collection_channel.0.clone(), name, store: self.store.clone() }
     }
 }
 
@@ -94,18 +107,42 @@ impl Service<'static> {
         &self,
         properties: HashMap<String, OwnedValue>,
         alias: String,
+        #[zbus(signal_context)]
+        signal: SignalContext<'_>
     ) -> fdo::Result<(ObjectPath, ObjectPath)> {
         // stringify the labelg
         let label: Option<String> = properties
             .get("org.freedesktop.Secret.Collection.Label")
             .and_then(|v| v.downcast_ref().ok());
 
+        let object_server = self.connection.object_server();
+
         // slugify the alias and handle the case where it's empty
         let alias = slugify(&alias);
+        
         let alias = if alias == "" { None } else { Some(alias) };
 
-        let id = self.store.create_collection(label, alias).await?;
-        let collection_path = collection_path(id).unwrap();
+        let id = self.store.create_collection(label, alias.clone()).await?;
+        let collection_path = collection_path(&id).unwrap();
+
+        // if the collection here doesn't exist, create it and handle alises
+        // the only reason it might exist is if they supplied an existing alias
+        if try_interface(object_server.interface::<_, Collection>(&collection_path).await)?.is_none() {
+            let c = self.make_collection(id);
+
+            object_server.at(&collection_path, c.clone()).await?;
+            
+            // if they supplied an alias, handle it
+            if let Some(alias) = alias {
+                let alias_path = alias_path(&alias).unwrap();
+                // remove the alias at this point
+                try_interface(object_server.remove::<Collection, _>(&alias_path).await)?;
+
+                object_server.at(&alias_path, c).await?;
+            }
+
+            Self::collection_created(&signal, collection_path.clone()).await?;
+        }
 
         Ok((collection_path, EMPTY_PATH))
     }
@@ -148,16 +185,33 @@ impl Service<'static> {
     async fn set_alias(&self, name: String, collection: OwnedObjectPath) -> fdo::Result<()> {
         let alias = slugify(&name);
 
+        let alias_path = alias_path(&alias).unwrap();
+
         let collection = collection.as_ref();
-        // get just the collection ID
-        let target = if collection == EMPTY_PATH {
+        let object_server = self.connection.object_server();
+
+        // remove the alias at this point
+        try_interface(object_server.remove::<Collection, _>(&alias_path).await)?;
+        
+        // TODO: Remove items
+        
+        let target_collection_id = if collection == EMPTY_PATH {
             None
         } else {
+            let collection_interface = object_server.interface::<_, Collection>(&collection).await?
+                .get().await
+                .to_owned();
+            object_server.at(&alias_path, collection_interface).await?;
+
+            // TODO: add items
+
+            // get just the ID
             collection
                 .strip_prefix("/org/freedesktop/secrets/collection/")
                 .map(|s| s.to_string())
         };
-        self.store.set_alias(alias, target).await?;
+        // save this persistently
+        self.store.set_alias(alias, target_collection_id).await?;
         Ok(())
     }
 
@@ -185,7 +239,7 @@ impl Service<'static> {
 }
 
 #[interface(name = "org.freedesktop.Secret.Collection")]
-impl Collection {
+impl Collection<'static> {
     
 }
 
