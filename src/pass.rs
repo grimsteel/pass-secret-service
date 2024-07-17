@@ -1,5 +1,16 @@
-use std::{collections::HashMap, env, fs::FileType, io, path::{Path, PathBuf}, process::Stdio};
-use tokio::{fs::{read, read_dir, read_to_string, DirBuilder, File, OpenOptions}, io::AsyncWriteExt, process::Command};
+use std::{
+    collections::HashMap,
+    env,
+    fs::FileType,
+    io,
+    path::{Path, PathBuf},
+    process::Stdio,
+};
+use tokio::{
+    fs::{read, read_dir, read_to_string, DirBuilder, File, OpenOptions},
+    io::AsyncWriteExt,
+    process::Command,
+};
 
 use crate::error::{Error, Result};
 
@@ -7,7 +18,7 @@ pub struct PasswordStore {
     pub directory: PathBuf,
     gpg_opts: Option<String>,
     file_mode: u32,
-    dir_mode: u32
+    dir_mode: u32,
 }
 
 impl PasswordStore {
@@ -16,7 +27,8 @@ impl PasswordStore {
         let mut env: HashMap<String, String> = env::vars().collect();
 
         // Either ~/.password-store or $PASSWORD_STORE_DIR
-        let directory = env.get("PASSWORD_STORE_DIR")
+        let directory = env
+            .get("PASSWORD_STORE_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
                 let home = Path::new(env.get("HOME").expect("$HOME must be set"));
@@ -25,7 +37,8 @@ impl PasswordStore {
 
         let gpg_opts = env.remove("PASSWORD_STORE_GPG_OPTS");
 
-        let umask = env.get("PASSWORD_STORE_UMASK")
+        let umask = env
+            .get("PASSWORD_STORE_UMASK")
             .and_then(|s| u32::from_str_radix(s, 8).ok())
             .unwrap_or(0o077);
 
@@ -33,12 +46,12 @@ impl PasswordStore {
         let dir_mode = !umask & 0o777;
         // lower 3 digits without execute bit
         let file_mode = !(umask | 0o111) & 0o777;
-        
+
         Ok(Self {
             directory,
             gpg_opts,
             dir_mode,
-            file_mode
+            file_mode,
         })
     }
 
@@ -46,7 +59,7 @@ impl PasswordStore {
         let mut path = self.directory.join(path);
 
         // add .gpg to the end if necessary
-        if !path.ends_with(".gpg"){
+        if !path.ends_with(".gpg") {
             let os_str = path.as_mut_os_string();
             os_str.push(".gpg");
         };
@@ -67,16 +80,16 @@ impl PasswordStore {
 
         let mut stdin = process.stdin.take().expect("child has stdin");
 
-        tokio::task::spawn(async move {
-            stdin.write_all(&contents).await
-        });
-        
+        tokio::task::spawn(async move { stdin.write_all(&contents).await });
+
         let output = process.wait_with_output().await?;
         if output.status.success() {
             // gpg decrypted successfulyl
             Ok(output.stdout)
         } else {
-            Err(Error::GpgError(String::from_utf8_lossy(&output.stderr).into_owned()))
+            Err(Error::GpgError(
+                String::from_utf8_lossy(&output.stderr).into_owned(),
+            ))
         }
     }
 
@@ -86,10 +99,10 @@ impl PasswordStore {
             match read_to_string(gpg_id_path).await {
                 Ok(value) => return Ok(value),
                 // not found, continue
-                Err(ref e) if e.kind() == io::ErrorKind::NotFound => {},
-                Err(e) => Err(e)?
+                Err(ref e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => Err(e)?,
             }
-            
+
             // at the root pass dir
             if component == self.directory {
                 break;
@@ -104,7 +117,8 @@ impl PasswordStore {
         Ok(DirBuilder::new()
             .recursive(true)
             .mode(self.dir_mode)
-            .create(dir).await?)
+            .create(dir)
+            .await?)
     }
 
     /// write a single password
@@ -128,10 +142,8 @@ impl PasswordStore {
 
         let mut stdin = process.stdin.take().expect("child has stdin");
 
-        tokio::task::spawn(async move {
-            stdin.write_all(&value).await
-        });
-        
+        tokio::task::spawn(async move { stdin.write_all(&value).await });
+
         let output = process.wait_with_output().await?;
         if output.status.success() {
             // encryption successful
@@ -140,17 +152,18 @@ impl PasswordStore {
                 .write(true)
                 .create(true)
                 .mode(self.file_mode)
-                .open(full_path).await?;
+                .open(full_path)
+                .await?;
 
             file.write_all(&output.stdout).await?;
-            
+
             Ok(())
         } else {
-            Err(Error::GpgError(String::from_utf8_lossy(&output.stderr).into_owned()))
+            Err(Error::GpgError(
+                String::from_utf8_lossy(&output.stderr).into_owned(),
+            ))
         }
     }
-
-
 
     /****** Some useful FS utilities ******/
 
@@ -175,13 +188,15 @@ impl PasswordStore {
     /// open a file for writing
     pub async fn open_file(&self, file_path: impl AsRef<Path>) -> Result<File> {
         let path = self.directory.join(file_path);
-        self.ensure_dirs(path.parent().expect("path is not a file")).await?;
+        self.ensure_dirs(path.parent().expect("path is not a file"))
+            .await?;
 
         Ok(OpenOptions::new()
-           .write(true)
-           .create(true)
-           .mode(self.file_mode)
-           .open(path).await?)
+            .write(true)
+            .create(true)
+            .mode(self.file_mode)
+            .open(path)
+            .await?)
     }
 
     /// make a dir and all its parents

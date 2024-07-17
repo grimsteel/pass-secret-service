@@ -9,7 +9,7 @@ pub enum Error {
     RedbError(redb::Error),
     GpgError(String),
     // pass is not initialized
-    NotInitialized
+    NotInitialized,
 }
 
 impl From<io::Error> for Error {
@@ -33,11 +33,9 @@ impl From<redb::Error> for Error {
 impl From<Error> for fdo::Error {
     fn from(value: Error) -> Self {
         match value {
-            Error::IoError(err) => {
-                Self::IOError(format!("{err}"))
-            },
+            Error::IoError(err) => Self::IOError(format!("{err}")),
             Error::DbusError(err) => Self::ZBus(err),
-            err => Self::Failed(format!("{err}"))
+            err => Self::Failed(format!("{err}")),
         }
     }
 }
@@ -56,4 +54,4 @@ impl Display for Error {
 
 impl std::error::Error for Error {}
 
-pub type Result<T=()> = std::result::Result<T, Error>;
+pub type Result<T = ()> = std::result::Result<T, Error>;

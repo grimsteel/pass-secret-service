@@ -2,15 +2,17 @@ use std::{borrow::Cow, collections::HashMap, path::Path, sync::Arc};
 
 use nanoid::nanoid;
 use redb::{Database, MultimapTableDefinition, ReadableTable, TableDefinition};
-use tokio::{task::spawn_blocking, sync::RwLock};
+use tokio::{sync::RwLock, task::spawn_blocking};
 
 use crate::{error::Result, pass::PasswordStore};
 
 // Collection tables
 
 // (key, value) --> secrets
-const ATTRIBUTES_TABLE: MultimapTableDefinition<(&str, &str), &str> = MultimapTableDefinition::new("attributes");
-const ATTRIBUTES_TABLE_REVERSE: TableDefinition<&str, Vec<(&str, &str)>> = TableDefinition::new("attributes-reverse");
+const ATTRIBUTES_TABLE: MultimapTableDefinition<(&str, &str), &str> =
+    MultimapTableDefinition::new("attributes");
+const ATTRIBUTES_TABLE_REVERSE: TableDefinition<&str, Vec<(&str, &str)>> =
+    TableDefinition::new("attributes-reverse");
 
 // collection id --> label
 const LABELS_TABLE: TableDefinition<&str, &str> = TableDefinition::new("labels");
@@ -24,10 +26,10 @@ type RedbResult<T> = std::result::Result<T, redb::Error>;
 
 /// open a db contained within the given PasswordStore
 async fn open_db(pass: &PasswordStore, path: impl AsRef<Path>) -> Result<Database> {
-    let db_file = pass.open_file(path).await?
-        .into_std().await;
+    let db_file = pass.open_file(path).await?.into_std().await;
     Ok(redb::Builder::new()
-        .create_file(db_file).map_err(|e| Into::<redb::Error>::into(e))?)
+        .create_file(db_file)
+        .map_err(|e| Into::<redb::Error>::into(e))?)
 }
 
 /// convert a string to a valid ASCII slug
@@ -56,13 +58,16 @@ pub fn slugify(string: &str) -> String {
 
 /// search a collection for the given attributes
 /// returns a vec of secret IDs
-pub fn search_collection(attrs: &HashMap<String, String>, db: &Database) -> RedbResult<Vec<String>> {
+pub fn search_collection(
+    attrs: &HashMap<String, String>,
+    db: &Database,
+) -> RedbResult<Vec<String>> {
     let tx = db.begin_read()?;
     let table = match tx.open_multimap_table(ATTRIBUTES_TABLE) {
         Ok(t) => t,
         // table does not exist yet - that's ok
         Err(redb::TableError::TableDoesNotExist(_)) => return Ok(vec![]),
-        Err(e) => return Err(e.into())
+        Err(e) => return Err(e.into()),
     };
     let mut results = vec![];
     for (k, v) in attrs {
@@ -76,7 +81,7 @@ pub fn search_collection(attrs: &HashMap<String, String>, db: &Database) -> Redb
 pub struct SecretStore {
     pass: PasswordStore,
     collection_dbs: Arc<RwLock<HashMap<String, Database>>>,
-    db: Arc<Database>
+    db: Arc<Database>,
 }
 
 impl SecretStore {
@@ -87,16 +92,18 @@ impl SecretStore {
         let has_default_collection = collections.contains_key("default");
 
         let db = open_db(&pass, &format!("{PASS_SUBDIR}/collections.redb")).await?;
-        
+
         let store = Self {
             pass,
             collection_dbs: Arc::new(RwLock::new(collections)),
-            db: Arc::new(db)
+            db: Arc::new(db),
         };
 
         // initialize the default store if necessary
         if !has_default_collection {
-            store.create_collection(Some("Default".into()), Some("default".into())).await?;
+            store
+                .create_collection(Some("Default".into()), Some("default".into()))
+                .await?;
         }
 
         Ok(store)
@@ -104,8 +111,10 @@ impl SecretStore {
 
     async fn get_current_collections(pass: &PasswordStore) -> Result<HashMap<String, Database>> {
         let mut collections = HashMap::new();
-        
-        for (_, id) in pass.list_items(PASS_SUBDIR).await?
+
+        for (_, id) in pass
+            .list_items(PASS_SUBDIR)
+            .await?
             .into_iter()
             .filter(|(file_type, _)| file_type.is_dir())
         {
@@ -127,13 +136,14 @@ impl SecretStore {
                 Ok(t) => t,
                 // table does not exist yet - that's ok
                 Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
-                Err(e) => return Err(e.into())
+                Err(e) => return Err(e.into()),
             };
             Ok(table.get(alias.as_str())?.map(|v| v.value().into()))
-        }).await.unwrap()?)
+        })
+        .await
+        .unwrap()?)
     }
 
-    
     pub async fn set_alias(&self, alias: String, target: Option<String>) -> Result {
         let db = self.db.clone();
         Ok(spawn_blocking(move || -> RedbResult<_> {
@@ -147,20 +157,28 @@ impl SecretStore {
                 // remove it
                 table.remove(alias.as_str())?;
             }
-            
+
             Ok(())
-        }).await.unwrap()?)
+        })
+        .await
+        .unwrap()?)
     }
 
     pub async fn collections(&self) -> Vec<String> {
-        self.collection_dbs.read().await
+        self.collection_dbs
+            .read()
+            .await
             .keys()
             .map(|a| a.to_owned())
             .collect()
     }
 
     /// returns the created collection name
-    pub async fn create_collection(&self, label: Option<String>, alias: Option<String>) -> Result<String> {
+    pub async fn create_collection(
+        &self,
+        label: Option<String>,
+        alias: Option<String>,
+    ) -> Result<String> {
         // I assume aliases are case sensitive
 
         let db = self.db.clone();
@@ -171,26 +189,33 @@ impl SecretStore {
             let mut labels = tx.open_table(LABELS_TABLE)?;
 
             let had_provided_label = label.is_some();
-            let label = label.map(Cow::Owned).unwrap_or("Untitled Collection".into());
+            let label = label
+                .map(Cow::Owned)
+                .unwrap_or("Untitled Collection".into());
 
             // an existing alias
             let existing_id = if let Some(alias) = alias.as_ref() {
                 if let Some(collection_id) = aliases.get(alias.as_str())? {
                     let id = collection_id.value();
-                    
+
                     // update the label if we were given one or there isn't one already
                     // in the 2nd case, it just becomes Untitled Collection
                     if had_provided_label || labels.get(id)?.is_none() {
                         labels.insert(id, label.as_ref())?;
                     }
-                    
+
                     Some(id.to_string())
-                } else { None }
-            } else { None };
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
 
             // if we couldn't find an existing ID, make a new collection
-            let id = if let Some(id) = existing_id { id } else {
-                
+            let id = if let Some(id) = existing_id {
+                id
+            } else {
                 let id = format!("{}-{}", slugify(&label), nanoid!(4));
 
                 // set the label and alias
@@ -207,7 +232,9 @@ impl SecretStore {
             tx.commit()?;
 
             Ok(id)
-        }).await.unwrap()?;
+        })
+        .await
+        .unwrap()?;
 
         let mut collections = self.collection_dbs.write().await;
 
@@ -226,7 +253,10 @@ impl SecretStore {
         Ok(collection_id)
     }
 
-    pub async fn search_all_collections(&self, attributes: HashMap<String, String>) -> Result<Vec<String>> {
+    pub async fn search_all_collections(
+        &self,
+        attributes: HashMap<String, String>,
+    ) -> Result<Vec<String>> {
         let collections = self.collection_dbs.clone();
         Ok(spawn_blocking(move || -> RedbResult<_> {
             let cols = collections.blocking_read();
@@ -238,6 +268,8 @@ impl SecretStore {
                         .map(|i| i.into_iter().map(|i| format!("{id}/{i}")).collect())
                 })
                 .collect()
-        }).await.unwrap()?)
+        })
+        .await
+        .unwrap()?)
     }
 }
