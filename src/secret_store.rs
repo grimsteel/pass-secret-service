@@ -139,8 +139,8 @@ impl<'a> SecretStore<'a> {
             };
             Ok(table.get(collection_id.as_str())?.map(|a| a.value().into()))
         })
-           .await
-           .unwrap()?)
+        .await
+        .unwrap()?)
     }
 
     pub async fn set_label(&self, collection_id: Arc<String>, label: String) -> Result {
@@ -151,8 +151,8 @@ impl<'a> SecretStore<'a> {
             table.insert(collection_id.as_str(), &*label)?;
             Ok(())
         })
-           .await
-           .unwrap()?)
+        .await
+        .unwrap()?)
     }
 
     pub async fn aliases(&self) -> Result<HashMap<String, String>> {
@@ -166,15 +166,16 @@ impl<'a> SecretStore<'a> {
                 Err(redb::TableError::TableDoesNotExist(_)) => return Ok(HashMap::new()),
                 Err(e) => return Err(e.into()),
             };
-            table.iter()?
+            table
+                .iter()?
                 .map(|i| {
                     let (k, v) = i?;
                     Ok((k.value().into(), v.value().into()))
                 })
                 .collect()
         })
-           .await
-           .unwrap()?)
+        .await
+        .unwrap()?)
     }
 
     pub async fn get_alias(&self, alias: String) -> Result<Option<String>> {
@@ -343,7 +344,9 @@ impl<'a> SecretStore<'a> {
 
     pub async fn stat_collection(&self, collection_id: &str) -> Result<Metadata> {
         // just use the attributes db file rather than actually calculating the last modified date
-        let collection_path = Path::new(PASS_SUBDIR).join(&collection_id).join(ATTRIBUTES_DB);
+        let collection_path = Path::new(PASS_SUBDIR)
+            .join(&collection_id)
+            .join(ATTRIBUTES_DB);
         Ok(self.pass.stat_file(collection_path).await?)
     }
 }

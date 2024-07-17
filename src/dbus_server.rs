@@ -1,6 +1,9 @@
 use std::{collections::HashMap, fmt::Display, sync::Arc, time::SystemTime};
 
-use tokio::{sync::mpsc::{self, Sender}, task};
+use tokio::{
+    sync::mpsc::{self, Sender},
+    task,
+};
 use zbus::{
     fdo, interface,
     object_server::SignalContext,
@@ -9,13 +12,18 @@ use zbus::{
 };
 
 use crate::{
-    error::Result, pass::PasswordStore, secret_store::{slugify, SecretStore}
+    error::Result,
+    pass::PasswordStore,
+    secret_store::{slugify, SecretStore},
 };
 
 const EMPTY_PATH: ObjectPath = ObjectPath::from_static_str_unchecked("/");
 
 fn collection_path<'a, 'b, T: Display>(collection_id: T) -> Option<ObjectPath<'b>> {
-    ObjectPath::try_from(format!("/org/freedesktop/secrets/collection/{collection_id}")).ok()
+    ObjectPath::try_from(format!(
+        "/org/freedesktop/secrets/collection/{collection_id}"
+    ))
+    .ok()
 }
 fn alias_path<'a, 'b, T: Display>(alias: T) -> Option<ObjectPath<'b>> {
     ObjectPath::try_from(format!("/org/freedesktop/secrets/aliases/{alias}")).ok()
@@ -24,26 +32,26 @@ fn try_interface<T>(result: zbus::Result<T>) -> zbus::Result<Option<T>> {
     match result {
         Ok(v) => Ok(Some(v)),
         Err(zbus::Error::InterfaceNotFound) => Ok(None),
-        Err(e) => Err(e)
+        Err(e) => Err(e),
     }
 }
 
 enum Message {
-    CollectionDeleted(Arc<String>)
+    CollectionDeleted(Arc<String>),
 }
 
 #[derive(Debug)]
 pub struct Service<'a> {
     store: SecretStore<'a>,
     connection: Connection,
-    collection_channel: Sender<Message>
+    collection_channel: Sender<Message>,
 }
 
 #[derive(Clone, Debug)]
 struct Collection<'a> {
     tx: Sender<Message>,
     store: SecretStore<'a>,
-    id: Arc<String>
+    id: Arc<String>,
 }
 
 struct Item;
@@ -60,8 +68,9 @@ impl Service<'static> {
             let object_server = connection.object_server();
 
             let aliases = store.aliases().await?;
-            let mut aliases_reverse = aliases.into_iter()
-                .fold(HashMap::<String, Vec<String>>::new(), |mut map, (alias, target)| {
+            let mut aliases_reverse = aliases.into_iter().fold(
+                HashMap::<String, Vec<String>>::new(),
+                |mut map, (alias, target)| {
                     {
                         if let Some(items) = map.get_mut(&alias) {
                             items.push(target);
@@ -70,14 +79,19 @@ impl Service<'static> {
                         }
                     }
                     map
-                });
+                },
+            );
 
             // add existing collections
             for collection in store.collections().await {
                 let collection_aliases = aliases_reverse.remove(&collection).into_iter().flatten();
                 let path = collection_path(&collection).unwrap();
-                
-                let c = Collection { tx: tx.clone(), store: store.clone(), id: Arc::new(collection) };
+
+                let c = Collection {
+                    tx: tx.clone(),
+                    store: store.clone(),
+                    id: Arc::new(collection),
+                };
 
                 // add the aliases
                 for alias in collection_aliases {
@@ -97,7 +111,7 @@ impl Service<'static> {
             // Handle notifications from the collections
             let signal_context = SignalContext::new(&connection_2, "/org/freedesktop/secrets")?;
             let object_server = connection_2.object_server();
-            
+
             while let Some(msg) = rx.recv().await {
                 match msg {
                     Message::CollectionDeleted(collection_id) => {
@@ -113,16 +127,20 @@ impl Service<'static> {
 
             zbus::Result::Ok(())
         });
-        
+
         Ok(Service {
             store,
             connection,
-            collection_channel: tx
+            collection_channel: tx,
         })
     }
 
     fn make_collection(&self, name: String) -> Collection<'static> {
-        Collection { tx: self.collection_channel.clone(), id: Arc::new(name), store: self.store.clone() }
+        Collection {
+            tx: self.collection_channel.clone(),
+            id: Arc::new(name),
+            store: self.store.clone(),
+        }
     }
 }
 
@@ -136,8 +154,7 @@ impl Service<'static> {
         &self,
         properties: HashMap<String, OwnedValue>,
         alias: String,
-        #[zbus(signal_context)]
-        signal: SignalContext<'_>
+        #[zbus(signal_context)] signal: SignalContext<'_>,
     ) -> fdo::Result<(ObjectPath, ObjectPath)> {
         // stringify the labelg
         let label: Option<String> = properties
@@ -148,7 +165,7 @@ impl Service<'static> {
 
         // slugify the alias and handle the case where it's empty
         let alias = slugify(&alias);
-        
+
         let alias = if alias == "" { None } else { Some(alias) };
 
         let id = self.store.create_collection(label, alias.clone()).await?;
@@ -156,11 +173,17 @@ impl Service<'static> {
 
         // if the collection here doesn't exist, create it and handle alises
         // the only reason it might exist is if they supplied an existing alias
-        if try_interface(object_server.interface::<_, Collection>(&collection_path).await)?.is_none() {
+        if try_interface(
+            object_server
+                .interface::<_, Collection>(&collection_path)
+                .await,
+        )?
+        .is_none()
+        {
             let c = self.make_collection(id);
 
             object_server.at(&collection_path, c.clone()).await?;
-            
+
             // if they supplied an alias, handle it
             if let Some(alias) = alias {
                 let alias_path = alias_path(&alias).unwrap();
@@ -181,10 +204,7 @@ impl Service<'static> {
         attributes: HashMap<String, String>,
     ) -> fdo::Result<(Vec<ObjectPath>, Vec<ObjectPath>)> {
         let items = self.store.search_all_collections(attributes).await?;
-        let paths = items
-            .into_iter()
-            .filter_map(collection_path)
-            .collect();
+        let paths = items.into_iter().filter_map(collection_path).collect();
         // we don't support locking
         Ok((paths, vec![]))
     }
@@ -202,8 +222,12 @@ impl Service<'static> {
     async fn read_alias(&self, name: String) -> fdo::Result<ObjectPath> {
         let alias = slugify(&name);
 
-        if let Some(target) = self.store.get_alias(alias).await?
-            .as_ref().and_then(collection_path)
+        if let Some(target) = self
+            .store
+            .get_alias(alias)
+            .await?
+            .as_ref()
+            .and_then(collection_path)
         {
             Ok(target)
         } else {
@@ -221,14 +245,17 @@ impl Service<'static> {
 
         // remove the alias at this point
         try_interface(object_server.remove::<Collection, _>(&alias_path).await)?;
-        
+
         // TODO: Remove items
-        
+
         let target_collection_id = if collection == EMPTY_PATH {
             None
         } else {
-            let collection_interface = object_server.interface::<_, Collection>(&collection).await?
-                .get().await
+            let collection_interface = object_server
+                .interface::<_, Collection>(&collection)
+                .await?
+                .get()
+                .await
                 .to_owned();
             object_server.at(&alias_path, collection_interface).await?;
 
@@ -271,8 +298,11 @@ impl Service<'static> {
 impl Collection<'static> {
     async fn delete(&self) -> ObjectPath {
         // notify the service
-        let _ = self.tx.send(Message::CollectionDeleted(self.id.clone())).await;
-        
+        let _ = self
+            .tx
+            .send(Message::CollectionDeleted(self.id.clone()))
+            .await;
+
         EMPTY_PATH
     }
 
@@ -280,11 +310,11 @@ impl Collection<'static> {
         &self,
         attributes: HashMap<String, String>,
     ) -> fdo::Result<Vec<ObjectPath>> {
-        let items = self.store.search_collection(self.id.clone(), attributes).await?;
-        let paths = items
-            .into_iter()
-            .filter_map(collection_path)
-            .collect();
+        let items = self
+            .store
+            .search_collection(self.id.clone(), attributes)
+            .await?;
+        let paths = items.into_iter().filter_map(collection_path).collect();
 
         Ok(paths)
     }
@@ -293,7 +323,7 @@ impl Collection<'static> {
         &self,
         properties: HashMap<String, OwnedValue>,
         secret: (),
-        replace: bool
+        replace: bool,
     ) -> fdo::Result<(ObjectPath, ObjectPath)> {
         todo!()
     }
@@ -305,9 +335,13 @@ impl Collection<'static> {
 
     #[zbus(property)]
     async fn label(&self) -> fdo::Result<String> {
-        Ok(self.store.get_label(self.id.clone()).await?.unwrap_or_else(|| "Untitled Collection".into()))
+        Ok(self
+            .store
+            .get_label(self.id.clone())
+            .await?
+            .unwrap_or_else(|| "Untitled Collection".into()))
     }
-    
+
     #[zbus(property)]
     async fn set_label(&mut self, label: String) -> fdo::Result<()> {
         self.store.set_label(self.id.clone(), label).await?;
@@ -315,12 +349,16 @@ impl Collection<'static> {
     }
 
     #[zbus(property)]
-    async fn locked(&self) -> bool { false }
+    async fn locked(&self) -> bool {
+        false
+    }
 
     #[zbus(property)]
     async fn created(&self) -> fdo::Result<u64> {
         let metadata = self.store.stat_collection(&self.id).await?;
-        let created = metadata.created().ok()
+        let created = metadata
+            .created()
+            .ok()
             // return 0 for times before the epoch or for platforms where this isn't supported
             .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
             .map(|t| t.as_secs())
@@ -332,7 +370,9 @@ impl Collection<'static> {
     #[zbus(property)]
     async fn modified(&self) -> fdo::Result<u64> {
         let metadata = self.store.stat_collection(&self.id).await?;
-        let modified = metadata.modified().ok()
+        let modified = metadata
+            .modified()
+            .ok()
             // return 0 for times before the epoch or for platforms where this isn't supported
             .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
             .map(|t| t.as_secs())
@@ -348,8 +388,7 @@ impl Collection<'static> {
     async fn item_deleted(ctx: &SignalContext<'_>, path: ObjectPath<'_>) -> zbus::Result<()>;
 
     #[zbus(signal)]
-    async fn item_changed(ctx: &SignalContext<'_>, path: ObjectPath<'_>)
-                                 -> zbus::Result<()>;
+    async fn item_changed(ctx: &SignalContext<'_>, path: ObjectPath<'_>) -> zbus::Result<()>;
 }
 
 #[interface(name = "org.freedesktop.Secret.Item")]
