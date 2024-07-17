@@ -183,4 +183,9 @@ impl PasswordStore {
            .mode(self.file_mode)
            .open(path).await?)
     }
+
+    /// make a dir and all its parents
+    pub async fn make_dir(&self, dir: impl AsRef<Path>) -> Result {
+        self.ensure_dirs(self.directory.join(dir)).await
+    }
 }
