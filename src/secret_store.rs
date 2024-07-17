@@ -100,5 +100,16 @@ impl SecretStore {
             .collect()
     }
 
-    //pub async fn create_collection(&self)
+    /// returns the created collection name
+    pub async fn create_collection(&self, label: Option<String>, alias: Option<String>) -> Result<String> {
+        // I assume aliases are case sensitive
+
+        let db = self.db.clone();
+
+        Ok(spawn_blocking(move || -> std::result::Result<_, redb::Error> {
+            let tx = db.begin_write()?;
+            let aliases = tx.open_table(ALIASES_TABLE);
+            if let Some(alias) 
+        }).await.unwrap()?
+    }
 }

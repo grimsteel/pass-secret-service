@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 libc = "0.2.155"
+nanoid = "0.4.0"
 redb = "2.1.1"
 tokio = { version = "1.38.1", features = ["fs", "rt", "rt-multi-thread", "macros", "process"] }
-uuid = "1.10.0"
 zbus = { version = "4.3.1", default-features = false, features = ["tokio"] }
