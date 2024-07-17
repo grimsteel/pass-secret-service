@@ -1,5 +1,7 @@
 use std::{fmt::Display, io};
 
+use zbus::fdo;
+
 #[derive(Debug)]
 pub enum Error {
     IoError(io::Error),
@@ -25,6 +27,18 @@ impl From<zbus::Error> for Error {
 impl From<redb::Error> for Error {
     fn from(value: redb::Error) -> Self {
         Self::RedbError(value)
+    }
+}
+
+impl From<Error> for fdo::Error {
+    fn from(value: Error) -> Self {
+        match value {
+            Error::IoError(err) => {
+                Self::IOError(format!("{err}"))
+            },
+            Error::DbusError(err) => Self::ZBus(err),
+            err => Self::Failed(format!("{err}"))
+        }
     }
 }
 
