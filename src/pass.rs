@@ -1,13 +1,13 @@
 use std::{
     collections::HashMap,
     env,
-    fs::FileType,
+    fs::{FileType, Metadata},
     io,
     path::{Path, PathBuf},
     process::Stdio,
 };
 use tokio::{
-    fs::{read, read_dir, read_to_string, DirBuilder, File, OpenOptions},
+    fs::{metadata, read, read_dir, read_to_string, DirBuilder, File, OpenOptions},
     io::AsyncWriteExt,
     process::Command,
 };
@@ -198,6 +198,15 @@ impl PasswordStore {
             .mode(self.file_mode)
             .open(path)
             .await?)
+    }
+
+    /// get metadata on a file
+    pub async fn stat_file(&self, file_path: impl AsRef<Path>) -> Result<Metadata> {
+        let path = self.directory.join(file_path);
+        self.ensure_dirs(path.parent().expect("path is not a file"))
+            .await?;
+
+        Ok(metadata(path).await?)
     }
 
     /// make a dir and all its parents

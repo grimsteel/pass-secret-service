@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, path::Path, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, fs::Metadata, path::Path, sync::Arc};
 
 use nanoid::nanoid;
 use redb::{Database, MultimapTableDefinition, ReadableTable, TableDefinition};
@@ -339,5 +339,11 @@ impl<'a> SecretStore<'a> {
         })
         .await
         .unwrap()?)
-    }   
+    }
+
+    pub async fn stat_collection(&self, collection_id: &str) -> Result<Metadata> {
+        // just use the attributes db file rather than actually calculating the last modified date
+        let collection_path = Path::new(PASS_SUBDIR).join(&collection_id).join(ATTRIBUTES_DB);
+        Ok(self.pass.stat_file(collection_path).await?)
+    }
 }

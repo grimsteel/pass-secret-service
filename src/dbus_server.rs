@@ -1,6 +1,6 @@
-use std::{collections::HashMap, fmt::Display, sync::Arc};
+use std::{collections::HashMap, fmt::Display, sync::Arc, time::SystemTime};
 
-use tokio::{sync::mpsc::{self, Receiver, Sender}, task};
+use tokio::{sync::mpsc::{self, Sender}, task};
 use zbus::{
     fdo, interface,
     object_server::SignalContext,
@@ -307,11 +307,49 @@ impl Collection<'static> {
     async fn label(&self) -> fdo::Result<String> {
         Ok(self.store.get_label(self.id.clone()).await?.unwrap_or_else(|| "Untitled Collection".into()))
     }
+    
     #[zbus(property)]
-    async fn set_label(&self, label: String) -> fdo::Result<()> {
+    async fn set_label(&mut self, label: String) -> fdo::Result<()> {
         self.store.set_label(self.id.clone(), label).await?;
         Ok(())
     }
+
+    #[zbus(property)]
+    async fn locked(&self) -> bool { false }
+
+    #[zbus(property)]
+    async fn created(&self) -> fdo::Result<u64> {
+        let metadata = self.store.stat_collection(&self.id).await?;
+        let created = metadata.created().ok()
+            // return 0 for times before the epoch or for platforms where this isn't supported
+            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .map(|t| t.as_secs())
+            .unwrap_or_default();
+
+        Ok(created)
+    }
+
+    #[zbus(property)]
+    async fn modified(&self) -> fdo::Result<u64> {
+        let metadata = self.store.stat_collection(&self.id).await?;
+        let modified = metadata.modified().ok()
+            // return 0 for times before the epoch or for platforms where this isn't supported
+            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .map(|t| t.as_secs())
+            .unwrap_or_default();
+
+        Ok(modified)
+    }
+
+    #[zbus(signal)]
+    async fn item_created(ctx: &SignalContext<'_>, path: ObjectPath<'_>) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn item_deleted(ctx: &SignalContext<'_>, path: ObjectPath<'_>) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn item_changed(ctx: &SignalContext<'_>, path: ObjectPath<'_>)
+                                 -> zbus::Result<()>;
 }
 
 #[interface(name = "org.freedesktop.Secret.Item")]
