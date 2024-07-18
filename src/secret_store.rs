@@ -2,7 +2,7 @@ use std::{borrow::Cow, collections::{HashMap, HashSet}, fs::Metadata, path::Path
 
 use nanoid::nanoid;
 use redb::{Database, MultimapTableDefinition, ReadableTable, TableDefinition};
-use tokio::{sync::RwLock, task::spawn_blocking};
+use tokio::{runtime::Handle, sync::RwLock, task::spawn_blocking};
 
 use crate::{error::Result, pass::PasswordStore};
 
@@ -377,5 +377,52 @@ impl<'a> SecretStore<'a> {
             .join(&collection_id)
             .join(ATTRIBUTES_DB);
         Ok(self.pass.stat_file(collection_path).await?)
+    }
+}
+
+impl SecretStore<'static> {
+    pub async fn write_secret(&self, collection_id: Arc<String>, secret_id: Arc<String>, value: Vec<u8>, attributes: HashMap<String, String>) -> Result {
+        let collection_dir = Path::new(PASS_SUBDIR)
+            .join(&*collection_id);
+        let secret_path = collection_dir
+            .join(&*secret_id);
+
+        // write the password
+        self.pass.write_password(secret_path, value).await?;
+
+        let pass_store = self.pass;
+
+        // write the attributes
+        let collections = self.collection_dbs.clone();
+        spawn_blocking(move || -> Result {
+            let mut cols = collections.blocking_write();
+
+            // get the db or make a new one
+            let db = if let Some(db) = cols.get(&*collection_id) { db } else {
+                let db_path = collection_dir.join(ATTRIBUTES_DB);
+                let db = Handle::current().block_on(async move {
+                    open_db(pass_store, db_path).await
+                })?;
+                // add it to the map
+                cols.entry((*collection_id).to_owned()).or_insert(db)
+            };
+
+            let tx = db.begin_write().map_err(|e| redb::Error::from(e))?;
+            let mut attributes_table = tx.open_multimap_table(ATTRIBUTES_TABLE).map_err(|e| redb::Error::from(e))?;
+
+            let value = secret_id.as_str();
+
+            // insert the attributes
+            for (k, v) in attributes {
+                attributes_table.insert((k.as_str(), v.as_str()), value).map_err(|e| redb::Error::from(e))?;
+            }
+
+            drop(attributes_table);
+            tx.commit().map_err(|e| redb::Error::from(e))?;
+
+            Ok(())
+        }).await.unwrap()?;
+
+        Ok(())
     }
 }
