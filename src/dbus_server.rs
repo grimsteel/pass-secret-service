@@ -77,10 +77,10 @@ impl Service<'static> {
                 HashMap::<String, Vec<String>>::new(),
                 |mut map, (alias, target)| {
                     {
-                        if let Some(items) = map.get_mut(&alias) {
-                            items.push(target);
+                        if let Some(items) = map.get_mut(&target) {
+                            items.push(alias);
                         } else {
-                            map.insert(alias, vec![target]);
+                            map.insert(target, vec![alias]);
                         }
                     }
                     map
@@ -252,7 +252,7 @@ impl Service<'static> {
         try_interface(object_server.remove::<Collection, _>(&alias_path).await)?;
 
         // TODO: Remove items
-
+        
         let target_collection_id = if collection == EMPTY_PATH {
             None
         } else {
@@ -282,7 +282,7 @@ impl Service<'static> {
             .collections()
             .await
             .into_iter()
-            .filter_map(|v| v.try_into().ok())
+            .filter_map(collection_path)
             .collect()
     }
 

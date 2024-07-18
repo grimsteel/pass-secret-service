@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, fs::Metadata, path::Path, sync::Arc};
+use std::{borrow::Cow, collections::{HashMap, HashSet}, fs::Metadata, path::Path, sync::Arc};
 
 use nanoid::nanoid;
 use redb::{Database, MultimapTableDefinition, ReadableTable, TableDefinition};
@@ -69,6 +69,8 @@ pub fn search_collection(
     attrs: &HashMap<String, String>,
     db: &Database,
 ) -> RedbResult<Vec<String>> {
+    if attrs.len() == 0 { return Ok(vec![]) };
+    
     let tx = db.begin_read()?;
     let table = match tx.open_multimap_table(ATTRIBUTES_TABLE) {
         Ok(t) => t,
@@ -76,12 +78,29 @@ pub fn search_collection(
         Err(redb::TableError::TableDoesNotExist(_)) => return Ok(vec![]),
         Err(e) => return Err(e.into()),
     };
-    let mut results = vec![];
-    for (k, v) in attrs {
-        // I'm not sure if results need to match ALL k/vs or just one
-        let items = table.get((k.as_str(), v.as_str()))?;
-        results.extend(items.filter_map(|item| Some(item.ok()?.value().to_string())));
-    }
+
+    // get all of the AccessGuards into memory so we don't have to clone each and every one
+    let guards = attrs.into_iter()
+        .filter_map(|(k, v)| {
+            Some(table
+                .get((k.as_str(), v.as_str())).ok()?
+                .filter_map(|v| v.ok())
+                .collect::<Vec<_>>())
+        })
+        .collect::<Vec<_>>();
+
+    let results = guards.iter()
+        .map(|items| {
+            items.iter()
+                .map(|v| v.value())
+                .collect::<HashSet<_>>()
+        })
+        .reduce(|acc, e| &acc & &e)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
+
     Ok(results)
 }
 
@@ -156,6 +175,8 @@ impl<'a> SecretStore<'a> {
             let tx = db.begin_write()?;
             let mut table = tx.open_table(LABELS_TABLE)?;
             table.insert(collection_id.as_str(), &*label)?;
+            drop(table);
+            tx.commit()?;
             Ok(())
         })
         .await
@@ -215,7 +236,8 @@ impl<'a> SecretStore<'a> {
                 // remove it
                 table.remove(alias.as_str())?;
             }
-
+            drop(table);
+            tx.commit()?;
             Ok(())
         })
         .await
