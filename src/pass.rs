@@ -2,12 +2,12 @@ use std::{
     collections::HashMap,
     env,
     fs::{FileType, Metadata},
-    io,
+    io::{self, ErrorKind},
     path::{Path, PathBuf},
     process::Stdio,
 };
 use tokio::{
-    fs::{metadata, read, read_dir, read_to_string, DirBuilder, File, OpenOptions},
+    fs::{metadata, read, read_dir, read_to_string, remove_file, DirBuilder, File, OpenOptions},
     io::AsyncWriteExt,
     process::Command,
 };
@@ -163,6 +163,15 @@ impl PasswordStore {
             Err(Error::GpgError(
                 String::from_utf8_lossy(&output.stderr).into_owned(),
             ))
+        }
+    }
+
+    pub async fn delete_password(&self, path: impl AsRef<Path>) -> Result {
+        let full_path = self.get_full_secret_path(path);
+        match remove_file(full_path).await {
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into())
         }
     }
 

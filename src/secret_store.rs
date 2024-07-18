@@ -1,17 +1,17 @@
-use std::{borrow::Cow, collections::{HashMap, HashSet}, fs::Metadata, path::Path, sync::Arc};
+use std::{borrow::Cow, collections::{HashMap, HashSet}, fmt::Debug, fs::Metadata, hash::Hash, path::Path, sync::Arc};
 
 use nanoid::nanoid;
-use redb::{Database, MultimapTableDefinition, ReadableTable, TableDefinition};
+use redb::{Database, MultimapTableDefinition, ReadableTable, TableDefinition, Value};
 use tokio::{runtime::Handle, sync::RwLock, task::spawn_blocking};
 
-use crate::{error::Result, pass::PasswordStore};
+use crate::{error::{Result, IntoResult}, pass::PasswordStore};
 
 // Collection tables
 
 // (key, value) --> secrets
 const ATTRIBUTES_TABLE: MultimapTableDefinition<(&str, &str), &str> =
     MultimapTableDefinition::new("attributes");
-const ATTRIBUTES_TABLE_REVERSE: TableDefinition<&str, Vec<(&str, &str)>> =
+const ATTRIBUTES_TABLE_REVERSE: TableDefinition<&str, RedbHashMap<&str, &str>> =
     TableDefinition::new("attributes-reverse");
 
 // collection id --> label
@@ -30,6 +30,44 @@ const NANOID_ALPHABET: [char; 63] = [
 ];
 
 type RedbResult<T> = std::result::Result<T, redb::Error>;
+
+#[derive(Debug)]
+struct RedbHashMap<K: Debug, V: Debug>(HashMap<K, V>);
+
+impl<K: Value, V: Value> Value for RedbHashMap<K, V>
+where
+    for<'a> <K as Value>::SelfType<'a>: Hash + Eq {
+    type SelfType<'a> = HashMap<K::SelfType<'a>, V::SelfType<'a>>
+    where
+        Self: 'a;
+
+    type AsBytes<'a> = Vec<u8>
+    where
+        Self: 'a;
+
+    fn fixed_width() -> Option<usize> { None }
+
+    fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
+    where
+        Self: 'a {
+        Vec::<(K, V)>::from_bytes(data)
+            .into_iter()
+            .collect()
+    }
+
+    fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
+    where
+        Self: 'a,
+        Self: 'b {
+        let vec = value.into_iter()
+            .collect::<Vec<_>>();
+        Vec::<(&K::SelfType::<'b>, V::SelfType::<'b>)>::as_bytes(vec)
+    }
+
+    fn type_name() -> redb::TypeName {
+        todo!()
+    }
+}
 
 /// open a db contained within the given PasswordStore
 async fn open_db(pass: &PasswordStore, path: impl AsRef<Path>) -> Result<Database> {
@@ -407,17 +445,19 @@ impl SecretStore<'static> {
                 cols.entry((*collection_id).to_owned()).or_insert(db)
             };
 
-            let tx = db.begin_write().map_err(|e| redb::Error::from(e))?;
-            let mut attributes_table = tx.open_multimap_table(ATTRIBUTES_TABLE).map_err(|e| redb::Error::from(e))?;
+            let tx = db.begin_write().into_result()?;
+            let mut attributes_table = tx.open_multimap_table(ATTRIBUTES_TABLE).into_result()?;
+            let mut attributes_table_reverse = tx.open_table(ATTRIBUTES_TABLE_REVERSE).into_result()?;
 
             let value = secret_id.as_str();
 
             // insert the attributes
             for (k, v) in attributes {
-                attributes_table.insert((k.as_str(), v.as_str()), value).map_err(|e| redb::Error::from(e))?;
+                attributes_table.insert((k.as_str(), v.as_str()), value).into_result()?;
             }
 
             drop(attributes_table);
+            drop(attributes_table_reverse);
             tx.commit().map_err(|e| redb::Error::from(e))?;
 
             Ok(())
@@ -425,4 +465,27 @@ impl SecretStore<'static> {
 
         Ok(())
     }
+
+    /*pub async fn delete_secret(&self, collection_id: Arc<String>, secret_id: Arc<String>) {
+        let secret_path = Path::new(PASS_SUBDIR)
+            .join(&*collection_id)
+            .join(&*secret_id);
+
+        // delete the password
+        self.pass.delete_password(secret_path).await?;
+
+        // delete the attributes
+        let collections = self.collection_dbs.clone();
+        spawn_blocking(move || -> RedbResult<()> {
+            let cols = collections.blocking_read();
+            if let Some(db) = cols.get(&*collection_id) {
+                let tx = db.begin_write()?;
+                let mut attributes_table = tx.open_multimap_table(ATTRIBUTES_TABLE)?;
+                //attributes_table
+            }
+            // it's fine if the DB doesn't exist
+        }).await.unwrap()?;
+
+        Ok(())
+    }*/
 }

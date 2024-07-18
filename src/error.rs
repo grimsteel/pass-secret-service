@@ -55,3 +55,13 @@ impl Display for Error {
 impl std::error::Error for Error {}
 
 pub type Result<T = ()> = std::result::Result<T, Error>;
+
+pub trait IntoResult<T> {
+    fn into_result(self) -> Result<T>;
+}
+
+impl<T, E: Into<redb::Error>> IntoResult<T> for std::result::Result<T, E> {
+    fn into_result(self) -> Result<T> {
+        self.map_err(|e| Into::<redb::Error>::into(e).into())
+    }
+}
