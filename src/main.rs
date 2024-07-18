@@ -6,6 +6,7 @@ mod dbus_server;
 mod error;
 mod pass;
 mod secret_store;
+mod redb_imps;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
