@@ -20,7 +20,14 @@ const LABELS_TABLE: TableDefinition<&str, &str> = TableDefinition::new("labels")
 const ALIASES_TABLE: TableDefinition<&str, &str> = TableDefinition::new("aliases");
 
 const PASS_SUBDIR: &'static str = "secret-service";
-const ATTRIBUTES_DB: &'static str = "attributes.db";
+const ATTRIBUTES_DB: &'static str = "attributes.redb";
+
+const NANOID_ALPHABET: [char; 63] = [
+    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's',
+    't', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L',
+    'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '0', '1', '2', '3', '4',
+    '5', '6', '7', '8', '9', '_',
+];
 
 type RedbResult<T> = std::result::Result<T, redb::Error>;
 
@@ -36,17 +43,17 @@ async fn open_db(pass: &PasswordStore, path: impl AsRef<Path>) -> Result<Databas
 pub fn slugify(string: &str) -> String {
     let mut slugified = Vec::<u8>::with_capacity(string.len());
 
-    // no two dashes in row
-    let mut after_dash = true;
+    // no two underscores in row
+    let mut after_underscore = true;
 
     for ch in string.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            after_dash = false;
+        if ch.is_ascii_alphanumeric() {
+            after_underscore = false;
             slugified.push(ch.to_ascii_lowercase() as u8);
-        } else if !after_dash {
-            // add a dash for all other chars
-            after_dash = true;
-            slugified.push(b'-')
+        } else if !after_underscore {
+            // add an underscore for all other chars
+            after_underscore = true;
+            slugified.push(b'_')
         }
     }
 
@@ -116,7 +123,7 @@ impl<'a> SecretStore<'a> {
             .list_items(PASS_SUBDIR)
             .await?
             .into_iter()
-            .filter(|(file_type, _)| file_type.is_dir())
+            .filter(|(file_type, a)| file_type.is_dir())
         {
             // make the DB for this collection
             let db_path = Path::new(PASS_SUBDIR).join(&id).join(ATTRIBUTES_DB);
@@ -267,7 +274,7 @@ impl<'a> SecretStore<'a> {
             let id = if let Some(id) = existing_id {
                 id
             } else {
-                let id = format!("{}-{}", slugify(&label), nanoid!(4));
+                let id = format!("{}_{}", slugify(&label), nanoid!(4, &NANOID_ALPHABET));
 
                 // set the label and alias
                 if let Some(alias) = alias.as_ref() {

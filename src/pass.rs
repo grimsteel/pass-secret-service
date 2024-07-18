@@ -195,6 +195,7 @@ impl PasswordStore {
         Ok(OpenOptions::new()
             .write(true)
             .create(true)
+            .read(true)
             .mode(self.file_mode)
             .open(path)
             .await?)

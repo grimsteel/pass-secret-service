@@ -1,4 +1,9 @@
-use std::{collections::HashMap, fmt::Display, sync::Arc, time::SystemTime};
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Display},
+    sync::Arc,
+    time::SystemTime,
+};
 
 use tokio::{
     sync::mpsc::{self, Sender},
@@ -19,7 +24,7 @@ use crate::{
 
 const EMPTY_PATH: ObjectPath = ObjectPath::from_static_str_unchecked("/");
 
-fn collection_path<'a, 'b, T: Display>(collection_id: T) -> Option<ObjectPath<'b>> {
+fn collection_path<'a, 'b, T: Display + Debug>(collection_id: T) -> Option<ObjectPath<'b>> {
     ObjectPath::try_from(format!(
         "/org/freedesktop/secrets/collection/{collection_id}"
     ))
