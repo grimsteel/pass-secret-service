@@ -1,7 +1,14 @@
-use std::{fmt::Display, io::{self, ErrorKind}};
+use std::{
+    fmt::Display,
+    io::{self, ErrorKind},
+};
 
-use redb::TableError;
-use zbus::{fdo, message::{self, Header}, names::ErrorName, DBusError, Message};
+use zbus::{
+    fdo,
+    message::{self, Header},
+    names::ErrorName,
+    DBusError, Message,
+};
 
 #[derive(Debug)]
 pub enum Error {
@@ -11,7 +18,7 @@ pub enum Error {
     GpgError(String),
     // pass is not initialized
     NotInitialized,
-    InvalidSession
+    InvalidSession,
 }
 
 impl From<io::Error> for Error {
@@ -36,18 +43,22 @@ impl DBusError for Error {
     fn create_reply(&self, msg: &Header<'_>) -> zbus::Result<Message> {
         let name = self.name();
         #[allow(deprecated)]
+        let msg = message::Builder::error(msg, name)?;
+
         match self {
-            Error::IoError(_) => todo!(),
-            Error::DbusError(_) => todo!(),
-            Error::RedbError(_) => todo!(),
-            Error::GpgError(_) => todo!(),
-            _ => message::Builder::error(msg, name)?.build(&()),
+            Error::IoError(e) => msg.build(&(e.to_string(),)),
+            Error::DbusError(e) => msg.build(&(e.to_string(),)),
+            Error::RedbError(e) => msg.build(&(e.to_string(),)),
+            Error::GpgError(e) => msg.build(&(e,)),
+            _ => msg.build(&()),
         }
     }
 
     fn name(&self) -> ErrorName<'_> {
         ErrorName::from_static_str_unchecked(match self {
-            Error::IoError(e) if e.kind() == ErrorKind::NotFound => "org.freedesktop.Secret.Error.NoSuchObject",
+            Error::IoError(e) if e.kind() == ErrorKind::NotFound => {
+                "org.freedesktop.Secret.Error.NoSuchObject"
+            }
             Error::IoError(_) => "org.freedesktop.DBus.Error.IOError",
             Error::DbusError(_) => "org.freedesktop.zbus.Error",
             Error::RedbError(_) => "me.grimsteel.PassSecretService.ReDBError",
@@ -65,7 +76,7 @@ impl DBusError for Error {
             Error::RedbError(_) => None,
             Error::GpgError(e) => Some(e.as_str()),
             Error::NotInitialized => None,
-            Error::InvalidSession => None
+            Error::InvalidSession => None,
         }
     }
 }
@@ -78,7 +89,17 @@ impl Display for Error {
             Error::GpgError(e) => write!(f, "GPG Error; {e}"),
             Error::RedbError(e) => write!(f, "ReDB Error: {e}"),
             Error::NotInitialized => write!(f, "Pass is not initialized"),
-            Error::InvalidSession =>  write!(f, "Invalid secret service session")
+            Error::InvalidSession => write!(f, "Invalid secret service session"),
+        }
+    }
+}
+
+impl From<Error> for fdo::Error {
+    fn from(value: Error) -> Self {
+        match value {
+            Error::IoError(err) => Self::IOError(format!("{err}")),
+            Error::DbusError(err) => Self::ZBus(err),
+            err => Self::Failed(format!("{err}")),
         }
     }
 }

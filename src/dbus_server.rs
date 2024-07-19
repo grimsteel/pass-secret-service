@@ -327,10 +327,7 @@ impl Collection<'static> {
         EMPTY_PATH
     }
 
-    async fn search_items(
-        &self,
-        attributes: HashMap<String, String>,
-    ) -> Result<Vec<ObjectPath>> {
+    async fn search_items(&self, attributes: HashMap<String, String>) -> Result<Vec<ObjectPath>> {
         let items = self
             .store
             .search_collection(self.id.clone(), attributes)
@@ -350,19 +347,19 @@ impl Collection<'static> {
     }
 
     #[zbus(property)]
-    async fn items(&self) -> Result<Vec<ObjectPath>> {
+    async fn items(&self) -> fdo::Result<Vec<ObjectPath>> {
         Ok(self
-           .store
-           .list_secrets(&*self.id)
-           .await?
-           .into_iter()
-           // get the full path of the secret
-           .filter_map(|id| secret_path(&*self.id, &id))
-           .collect())
+            .store
+            .list_secrets(&*self.id)
+            .await?
+            .into_iter()
+            // get the full path of the secret
+            .filter_map(|id| secret_path(&*self.id, &id))
+            .collect())
     }
 
     #[zbus(property)]
-    async fn label(&self) -> Result<String> {
+    async fn label(&self) -> fdo::Result<String> {
         Ok(self
             .store
             .get_label(self.id.clone())
@@ -371,7 +368,7 @@ impl Collection<'static> {
     }
 
     #[zbus(property)]
-    async fn set_label(&mut self, label: String) -> Result<()> {
+    async fn set_label(&mut self, label: String) -> fdo::Result<()> {
         self.store.set_label(self.id.clone(), label).await?;
         Ok(())
     }
@@ -383,7 +380,7 @@ impl Collection<'static> {
     }
 
     #[zbus(property)]
-    async fn created(&self) -> Result<u64> {
+    async fn created(&self) -> fdo::Result<u64> {
         let metadata = self.store.stat_collection(&self.id).await?;
         let created = metadata
             .created()
@@ -397,7 +394,7 @@ impl Collection<'static> {
     }
 
     #[zbus(property)]
-    async fn modified(&self) -> Result<u64> {
+    async fn modified(&self) -> fdo::Result<u64> {
         let metadata = self.store.stat_collection(&self.id).await?;
         let modified = metadata
             .modified()

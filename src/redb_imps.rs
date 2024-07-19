@@ -75,7 +75,7 @@ fn test_encode_int() {
 }
 
 #[derive(Debug)]
-pub struct RedbHashMap<K: Debug, V: Debug>(HashMap<K, V>);
+pub struct RedbHashMap<K: Debug, V: Debug>(K, V);
 
 impl<K, V> Value for RedbHashMap<K, V>
 where

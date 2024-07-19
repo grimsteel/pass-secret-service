@@ -1,13 +1,4 @@
-use std::{
-    any::type_name,
-    borrow::Cow,
-    collections::{HashMap, HashSet},
-    fmt::Debug,
-    fs::Metadata,
-    hash::Hash,
-    path::Path,
-    sync::Arc,
-};
+use std::{borrow::Cow, collections::HashMap, fmt::Debug, fs::Metadata, path::Path, sync::Arc};
 
 use nanoid::nanoid;
 use redb::{Database, MultimapTableDefinition, ReadableTable, TableDefinition};
