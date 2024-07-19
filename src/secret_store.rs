@@ -340,19 +340,18 @@ impl<'a> SecretStore<'a> {
     }
 
     /// search all collections for secrets matching the given attributes
+    /// returns a map of collection id to items
     pub async fn search_all_collections(
         &self,
         attributes: HashMap<String, String>,
-    ) -> Result<Vec<String>> {
+    ) -> Result<HashMap<String, Vec<String>>> {
         let collections = self.collection_dbs.clone();
         Ok(spawn_blocking(move || -> RedbResult<_> {
             let cols = collections.blocking_read();
             cols.iter()
                 .map(|(id, db)| {
                     // search each collection
-                    search_collection(&attributes, db)
-                        // append the collection ID to each result
-                        .map(|i| i.into_iter().map(|i| format!("{id}/{i}")).collect())
+                    Ok((id.to_owned(), search_collection(&attributes, db)?))
                 })
                 .collect()
         })
@@ -386,6 +385,24 @@ impl<'a> SecretStore<'a> {
             .join(&collection_id)
             .join(ATTRIBUTES_DB);
         Ok(self.pass.stat_file(collection_path).await?)
+    }
+
+    pub async fn list_secrets(&self, collection_id: &str) -> Result<Vec<String>> {
+        let collection_path = Path::new(PASS_SUBDIR).join(&collection_id);
+
+        Ok(self
+            .pass
+            .list_items(collection_path)
+            .await?
+            .into_iter()
+            .filter_map(|(file_type, name)| {
+                if file_type.is_file() && name.ends_with(".gpg") {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .collect())
     }
 
     /// decrypt a secret stored in the given collection with the given id

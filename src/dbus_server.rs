@@ -30,6 +30,15 @@ fn collection_path<'a, 'b, T: Display + Debug>(collection_id: T) -> Option<Objec
     ))
     .ok()
 }
+fn secret_path<'a, 'b, T: Display + Debug>(
+    collection_id: T,
+    secret_id: T,
+) -> Option<ObjectPath<'b>> {
+    ObjectPath::try_from(format!(
+        "/org/freedesktop/secrets/collection/{collection_id}/{secret_id}"
+    ))
+    .ok()
+}
 fn alias_path<'a, 'b, T: Display>(alias: T) -> Option<ObjectPath<'b>> {
     ObjectPath::try_from(format!("/org/freedesktop/secrets/aliases/{alias}")).ok()
 }
@@ -329,17 +338,24 @@ impl Collection<'static> {
         properties: HashMap<String, OwnedValue>,
         secret: (),
         replace: bool,
-    ) -> fdo::Result<(ObjectPath, ObjectPath)> {
+    ) -> Result<(ObjectPath, ObjectPath)> {
         todo!()
     }
 
     #[zbus(property)]
-    async fn items(&self) -> Vec<ObjectPath> {
-        todo!()
+    async fn items(&self) -> Result<Vec<ObjectPath>> {
+        Ok(self
+           .store
+           .list_secrets(&*self.id)
+           .await?
+           .into_iter()
+           // get the full path of the secret
+           .filter_map(|id| secret_path(&*self.id, &id))
+           .collect())
     }
 
     #[zbus(property)]
-    async fn label(&self) -> fdo::Result<String> {
+    async fn label(&self) -> Result<String> {
         Ok(self
             .store
             .get_label(self.id.clone())
