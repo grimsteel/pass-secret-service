@@ -3,18 +3,17 @@ use std::{collections::HashMap, sync::Arc, time::SystemTime};
 use zbus::{
     fdo, interface,
     object_server::SignalContext,
-    zvariant::{ObjectPath, OwnedValue},
+    zvariant::{Dict, ObjectPath, OwnedValue},
     Connection, ObjectServer,
 };
 
 use crate::{error::Result, secret_store::SecretStore};
 
 use super::{
-    item::Item,
-    utils::{
+    item::Item, prompt::Prompt, utils::{
         alias_path, collection_path, secret_alias_path, secret_path, try_interface, Secret,
         EMPTY_PATH,
-    },
+    }
 };
 
 #[derive(Clone, Debug)]
@@ -77,7 +76,7 @@ impl Collection<'static> {
     async fn search_items(&self, attributes: HashMap<String, String>) -> Result<Vec<ObjectPath>> {
         let items = self
             .store
-            .search_collection(self.id.clone(), attributes)
+            .search_collection(self.id.clone(), Arc::new(attributes))
             .await?;
         let paths = items.into_iter().filter_map(collection_path).collect();
 
@@ -89,8 +88,39 @@ impl Collection<'static> {
         properties: HashMap<String, OwnedValue>,
         secret: Secret,
         replace: bool,
+        
     ) -> Result<(ObjectPath, ObjectPath)> {
-        todo!()
+        let label = dbg!(properties.get("org.freedesktop.Secret.Item.Label")
+            .and_then(|l| l.downcast_ref::<String>().ok()));
+        let attrs = dbg!(properties.get("org.freedesktop.Secret.Item.Attributes")
+                         .and_then(|a| a.downcast_ref::<Dict>().ok())
+                         .and_then(|a| HashMap::<String, String>::try_from(a).ok())
+                         .unwrap_or_default()
+        );
+        let attrs = Arc::new(attrs);
+
+        // TODO: actual secret decoding w/ sessions
+        let secret_data = secret.value;
+
+        let secret_id = if replace {
+            
+            // replace the secret with the matching attrs
+            let matching_secret = self.store.search_collection(self.id.clone(), attrs.clone()).await?;
+            if let Some(secret_id) = matching_secret.into_iter().nth(0) {
+                // TODO: update label and secret
+                
+                secret_id
+            } else {
+                self.store.create_secret(self.id.clone(), label, secret_data, attrs).await?
+            }
+        } else {
+            self.store.create_secret(self.id.clone(), label, secret_data, attrs).await?
+        };
+            
+        let path = secret_path(&*self.id, &secret_id).unwrap();
+
+        // no prompt needed for GPG encryption
+        Ok((path, EMPTY_PATH))
     }
 
     #[zbus(property)]
@@ -110,8 +140,7 @@ impl Collection<'static> {
         Ok(self
             .store
             .get_label(self.id.clone())
-            .await?
-            .unwrap_or_else(|| "Untitled Collection".into()))
+            .await?)
     }
 
     #[zbus(property)]

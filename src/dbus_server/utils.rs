@@ -42,8 +42,9 @@ pub fn try_interface<T>(result: zbus::Result<T>) -> zbus::Result<Option<T>> {
 #[derive(DeserializeDict, SerializeDict, Type)]
 #[zvariant(signature = "dict")]
 pub struct Secret {
-    session: OwnedObjectPath,
-    parameters: Vec<u8>,
-    value: Vec<u8>,
-    content_type: String,
+    pub session: OwnedObjectPath,
+    pub parameters: Vec<u8>,
+    pub value: Vec<u8>,
+    pub content_type: String,
 }
+
