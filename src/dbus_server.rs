@@ -169,7 +169,7 @@ impl Service<'static> {
         properties: HashMap<String, OwnedValue>,
         alias: String,
         #[zbus(signal_context)] signal: SignalContext<'_>,
-    ) -> fdo::Result<(ObjectPath, ObjectPath)> {
+    ) -> Result<(ObjectPath, ObjectPath)> {
         // stringify the labelg
         let label: Option<String> = properties
             .get("org.freedesktop.Secret.Collection.Label")
@@ -216,9 +216,16 @@ impl Service<'static> {
     async fn search_items(
         &self,
         attributes: HashMap<String, String>,
-    ) -> fdo::Result<(Vec<ObjectPath>, Vec<ObjectPath>)> {
+    ) -> Result<(Vec<ObjectPath>, Vec<ObjectPath>)> {
         let items = self.store.search_all_collections(attributes).await?;
-        let paths = items.into_iter().filter_map(collection_path).collect();
+        let paths = items
+            .into_iter()
+            .flat_map(|(col, secrets)| {
+                secrets
+                    .into_iter()
+                    .filter_map(move |secret| secret_path(&col, &secret))
+            })
+            .collect();
         // we don't support locking
         Ok((paths, vec![]))
     }
@@ -233,7 +240,7 @@ impl Service<'static> {
         (vec![], EMPTY_PATH)
     }
 
-    async fn read_alias(&self, name: String) -> fdo::Result<ObjectPath> {
+    async fn read_alias(&self, name: String) -> Result<ObjectPath> {
         let alias = slugify(&name);
 
         if let Some(target) = self
@@ -249,7 +256,7 @@ impl Service<'static> {
         }
     }
 
-    async fn set_alias(&self, name: String, collection: OwnedObjectPath) -> fdo::Result<()> {
+    async fn set_alias(&self, name: String, collection: OwnedObjectPath) -> Result<()> {
         let alias = slugify(&name);
 
         let alias_path = alias_path(&alias).unwrap();
@@ -323,7 +330,7 @@ impl Collection<'static> {
     async fn search_items(
         &self,
         attributes: HashMap<String, String>,
-    ) -> fdo::Result<Vec<ObjectPath>> {
+    ) -> Result<Vec<ObjectPath>> {
         let items = self
             .store
             .search_collection(self.id.clone(), attributes)
@@ -364,18 +371,19 @@ impl Collection<'static> {
     }
 
     #[zbus(property)]
-    async fn set_label(&mut self, label: String) -> fdo::Result<()> {
+    async fn set_label(&mut self, label: String) -> Result<()> {
         self.store.set_label(self.id.clone(), label).await?;
         Ok(())
     }
 
     #[zbus(property)]
     async fn locked(&self) -> bool {
+        // we don't support locking
         false
     }
 
     #[zbus(property)]
-    async fn created(&self) -> fdo::Result<u64> {
+    async fn created(&self) -> Result<u64> {
         let metadata = self.store.stat_collection(&self.id).await?;
         let created = metadata
             .created()
@@ -389,7 +397,7 @@ impl Collection<'static> {
     }
 
     #[zbus(property)]
-    async fn modified(&self) -> fdo::Result<u64> {
+    async fn modified(&self) -> Result<u64> {
         let metadata = self.store.stat_collection(&self.id).await?;
         let modified = metadata
             .modified()
