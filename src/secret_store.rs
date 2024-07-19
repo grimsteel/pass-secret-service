@@ -4,7 +4,7 @@ use nanoid::nanoid;
 use redb::{Database, MultimapTableDefinition, ReadableTable, TableDefinition};
 use tokio::{runtime::Handle, sync::RwLock, task::spawn_blocking};
 
-use crate::{error::{IntoResult, Result}, pass::PasswordStore, redb_imps::RedbHashMap};
+use crate::{error::{ignore_nonexistent_table, IntoResult, Result}, pass::PasswordStore, redb_imps::RedbHashMap};
 
 // Collection tables
 
@@ -71,36 +71,37 @@ pub fn search_collection(
     if attrs.len() == 0 { return Ok(vec![]) };
     
     let tx = db.begin_read()?;
-    let table = match tx.open_multimap_table(ATTRIBUTES_TABLE) {
-        Ok(t) => t,
-        // table does not exist yet - that's ok
-        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(vec![]),
-        Err(e) => return Err(e.into()),
-    };
+    let attributes = ignore_nonexistent_table!(tx.open_multimap_table(ATTRIBUTES_TABLE), vec![]);
+    let attributes_reverse = ignore_nonexistent_table!(tx.open_table(ATTRIBUTES_TABLE_REVERSE), vec![]);
 
-    // get all of the AccessGuards into memory so we don't have to clone each and every one
-    let guards = attrs.into_iter()
-        .filter_map(|(k, v)| {
-            Some(table
-                .get((k.as_str(), v.as_str())).ok()?
-                .filter_map(|v| v.ok())
-                .collect::<Vec<_>>())
-        })
-        .collect::<Vec<_>>();
+    let mut attr_iter = attrs.into_iter();
 
-    let results = guards.iter()
-        .map(|items| {
-            items.iter()
-                .map(|v| v.value())
-                .collect::<HashSet<_>>()
-        })
-        .reduce(|acc, e| &acc & &e)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|s| s.to_string())
-        .collect();
+    // get the secrets which fit the first K/V attr pair
+    let initial_matches =
+        attributes.get(
+            attr_iter.next().map(|(k, v)| (k.as_str(), v.as_str())).unwrap()
+        )?;
 
-    Ok(results)
+    // filter the items from there
+    initial_matches.map(|r| -> RedbResult<_> {
+        let secret_id_guard = r?;
+        let secret_id = secret_id_guard.value();
+        // get the attributes for this secret
+        if let Some(secret_attrs) = attributes_reverse.get(secret_id)? {
+            let secret_attrs = secret_attrs.value();
+            // make sure it's a subset of the remaining `attrs`
+            for (k, v) in attr_iter.clone() {
+                if secret_attrs.get(k.as_str()) != Some(&v.as_str()) {
+                    return Ok(None)
+                };
+            }
+            Ok(Some(secret_id.to_owned()))
+        } else {
+            Ok(None)
+        }
+    })
+        .filter_map(|item| item.transpose())
+        .collect::<RedbResult<Vec<_>>>()
 }
 
 #[derive(Debug, Clone)]
@@ -141,7 +142,7 @@ impl<'a> SecretStore<'a> {
             .list_items(PASS_SUBDIR)
             .await?
             .into_iter()
-            .filter(|(file_type, a)| file_type.is_dir())
+            .filter(|(file_type, _)| file_type.is_dir())
         {
             // make the DB for this collection
             let db_path = Path::new(PASS_SUBDIR).join(&id).join(ATTRIBUTES_DB);
@@ -156,12 +157,7 @@ impl<'a> SecretStore<'a> {
         let db = self.db.clone();
         Ok(spawn_blocking(move || -> RedbResult<_> {
             let tx = db.begin_read()?;
-            let table = match tx.open_table(LABELS_TABLE) {
-                Ok(t) => t,
-                // table does not exist yet - that's ok
-                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
-                Err(e) => return Err(e.into()),
-            };
+            let table = ignore_nonexistent_table!(tx.open_table(LABELS_TABLE), None);
             Ok(table.get(collection_id.as_str())?.map(|a| a.value().into()))
         })
         .await
@@ -187,12 +183,7 @@ impl<'a> SecretStore<'a> {
         Ok(spawn_blocking(move || -> RedbResult<_> {
             // open the aliases table
             let tx = db.begin_read()?;
-            let table = match tx.open_table(ALIASES_TABLE) {
-                Ok(t) => t,
-                // table does not exist yet - that's ok
-                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(HashMap::new()),
-                Err(e) => return Err(e.into()),
-            };
+            let table = ignore_nonexistent_table!(tx.open_table(ALIASES_TABLE), HashMap::new());
             table
                 .iter()?
                 .map(|i| {
@@ -210,12 +201,7 @@ impl<'a> SecretStore<'a> {
         Ok(spawn_blocking(move || -> RedbResult<_> {
             // open the aliases table
             let tx = db.begin_read()?;
-            let table = match tx.open_table(ALIASES_TABLE) {
-                Ok(t) => t,
-                // table does not exist yet - that's ok
-                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
-                Err(e) => return Err(e.into()),
-            };
+            let table = ignore_nonexistent_table!(tx.open_table(ALIASES_TABLE), None);
             Ok(table.get(alias.as_str())?.map(|v| v.value().into()))
         })
         .await
@@ -412,12 +398,19 @@ impl SecretStore<'static> {
 
             let value = secret_id.as_str();
 
+            // remove existing attributes for this secret
+            if let Some(existing_attrs) = attributes_table_reverse.get(value).into_result()? {
+                for (k, v) in existing_attrs.value() {
+                    attributes_table.remove((k, v), value).into_result()?;
+                }
+            }
+
             let attributes_ref = attributes
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str()))
                 .collect::<HashMap<_, _>>();
 
-            // insert the attributes
+            // insert the new attributes
             for (k, v) in &attributes {
                 attributes_table.insert((k.as_str(), v.as_str()), value).into_result()?;
             }

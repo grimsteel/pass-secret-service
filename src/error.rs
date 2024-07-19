@@ -1,5 +1,6 @@
 use std::{fmt::Display, io};
 
+use redb::TableError;
 use zbus::fdo;
 
 #[derive(Debug)]
@@ -65,3 +66,15 @@ impl<T, E: Into<redb::Error>> IntoResult<T> for std::result::Result<T, E> {
         self.map_err(|e| Into::<redb::Error>::into(e).into())
     }
 }
+
+macro_rules! ignore_nonexistent_table {
+    ($expression:expr, $default:expr) => {
+        match $expression {
+            Ok(t) => t,
+            // table does not exist yet - that's ok
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok($default),
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+pub(crate) use ignore_nonexistent_table;
