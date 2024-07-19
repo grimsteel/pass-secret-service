@@ -7,7 +7,10 @@ use std::{
     process::Stdio,
 };
 use tokio::{
-    fs::{metadata, read, read_dir, read_to_string, remove_dir_all, remove_file, DirBuilder, File, OpenOptions},
+    fs::{
+        metadata, read, read_dir, read_to_string, remove_dir_all, remove_file, DirBuilder, File,
+        OpenOptions,
+    },
     io::AsyncWriteExt,
     process::Command,
 };

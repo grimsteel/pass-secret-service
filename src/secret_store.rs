@@ -1,7 +1,9 @@
 use std::{borrow::Cow, collections::HashMap, fmt::Debug, fs::Metadata, path::Path, sync::Arc};
 
 use nanoid::nanoid;
-use redb::{Database, MultimapTableDefinition, ReadableMultimapTable, ReadableTable, TableDefinition};
+use redb::{
+    Database, MultimapTableDefinition, ReadableMultimapTable, ReadableTable, TableDefinition,
+};
 use tokio::{runtime::Handle, sync::RwLock, task::spawn_blocking};
 
 use crate::{
@@ -23,7 +25,8 @@ const LABELS_TABLE: TableDefinition<&str, &str> = TableDefinition::new("labels")
 // collection alias -> id
 const ALIASES_TABLE: TableDefinition<&str, &str> = TableDefinition::new("aliases");
 // id -> alises
-const ALIASES_TABLE_REVERSE: MultimapTableDefinition<&str, &str> = MultimapTableDefinition::new("aliases_reverse");
+const ALIASES_TABLE_REVERSE: MultimapTableDefinition<&str, &str> =
+    MultimapTableDefinition::new("aliases_reverse");
 
 const PASS_SUBDIR: &'static str = "secret-service";
 const ATTRIBUTES_DB: &'static str = "attributes.redb";
@@ -216,7 +219,10 @@ impl<'a> SecretStore<'a> {
     }
 
     /// list the aliases that point to a collection
-    pub async fn list_aliases_for_collection(&self, collection_id: Arc<String>) -> Result<Vec<String>> {
+    pub async fn list_aliases_for_collection(
+        &self,
+        collection_id: Arc<String>,
+    ) -> Result<Vec<String>> {
         let collections = self.collection_dbs.clone();
         Ok(spawn_blocking(move || -> RedbResult<_> {
             let cols = collections.blocking_read();
@@ -227,7 +233,8 @@ impl<'a> SecretStore<'a> {
                     vec![]
                 );
 
-                aliases_reverse.get(collection_id.as_str())?
+                aliases_reverse
+                    .get(collection_id.as_str())?
                     .map(|el| Ok(el?.value().to_owned()))
                     .collect::<RedbResult<Vec<_>>>()
             } else {
@@ -377,10 +384,7 @@ impl<'a> SecretStore<'a> {
     }
 
     /// delete a collection and all its secrets
-    pub async fn delete_collection(
-        &self,
-        collection_id: Arc<String>
-    ) -> Result {
+    pub async fn delete_collection(&self, collection_id: Arc<String>) -> Result {
         // remove it from the collection db map
         self.collection_dbs.write().await.remove(&*collection_id);
         // remove the dir
@@ -412,7 +416,9 @@ impl<'a> SecretStore<'a> {
             tx.commit()?;
 
             Ok(())
-        }).await.unwrap()?;
+        })
+        .await
+        .unwrap()?;
 
         Ok(())
     }
@@ -578,11 +584,7 @@ impl<'a> SecretStore<'a> {
         Ok(())
     }
 
-    pub async fn stat_secret(
-        &self,
-        collection_id: &str,
-        secret_id: &str
-    ) -> Result<Metadata> {
+    pub async fn stat_secret(&self, collection_id: &str, secret_id: &str) -> Result<Metadata> {
         let secret_path = Path::new(PASS_SUBDIR)
             .join(&*collection_id)
             .join(&*secret_id);

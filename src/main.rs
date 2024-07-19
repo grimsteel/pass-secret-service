@@ -1,4 +1,4 @@
-use dbus_server::Service;
+use dbus_server::service::Service;
 use pass::PasswordStore;
 use zbus::Connection;
 
