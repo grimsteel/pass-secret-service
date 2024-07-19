@@ -1,49 +1,70 @@
-use std::{any::type_name, collections::HashMap, fmt::Debug, hash::Hash};
+use std::{any::type_name, collections::HashMap, fmt::Debug, hash::Hash, io::{self, Cursor, Read, Write}};
 
 use redb::{TypeName, Value};
 
-/// decode a 8-64 bit integer.
-/// returns the integer and how many bytes were read
-fn decode_int(data: &[u8], offset: usize) -> (u64, usize) {
-    match data[offset] {
-        // u64
+/// decode a variable length integer
+fn decode_int<T: Read>(data: &mut T) -> io::Result<usize> {
+    let mut byte_buf = [0];
+    data.read_exact(&mut byte_buf)?;
+    match byte_buf[0] {
         255 => {
-            (u64::from_le_bytes(data[offset+1..offset+9].try_into().unwrap()) as u64, 9)
+            let mut int_buf = [0, 0, 0, 0];
+            data.read_exact(&mut int_buf)?;
+            Ok(u32::from_le_bytes(int_buf) as usize)
         },
         254 => {
-            (u32::from_le_bytes(data[offset+1..offset+5].try_into().unwrap()) as u64, 5)
-        },
-        253 => {
-            (u16::from_le_bytes(data[offset+1..offset+3].try_into().unwrap()) as u64, 3)
+            let mut short_buf = [0, 0];
+            data.read_exact(&mut short_buf)?;
+            Ok(u16::from_le_bytes(short_buf) as usize)
         },
         num => {
-            (num as u64, 1)
+            Ok(num as usize)
         }
     }
 }
 
 #[test]
-fn test_decode_int() {
-    let four = [0, 2, 4];
-    assert_eq!(decode_int(&four, 2), (4, 1));
-    let short = [2, 253, 55, 187];
-    assert_eq!(decode_int(&short, 1), (55 | (187 << 8), 3)); 
+fn test_decode_int()  {
+    let four: [u8; 1] = [4];
+    assert_eq!(decode_int(&mut four.as_ref()).unwrap(), 4);
+    let short: [u8; 3] = [254, 55, 187];
+    assert_eq!(decode_int(&mut short.as_ref()).unwrap(), 55 | (187 << 8));
+    let int: [u8; 5] = [255, 123, 254, 2, 3];
+    assert_eq!(decode_int(&mut int.as_ref()).unwrap(), 123 | (254 << 8) | (2 << 16) | (3 << 24));
 }
 
 /// encodes an int to the end of a buffer
-fn encode_int(int: u64, buf: &mut Vec<u8>) {
+fn encode_int<T: Write>(int: usize, buf: &mut T) -> io::Result<()> {
     if int < 253 {
-        buf.push(int as u8);
+        buf.write_all(&[int as u8])?;
     } else if int <= u16::MAX.into() {
-        buf.push(253);
-        buf.extend_from_slice(&(int as u16).to_le_bytes());
-    } else if int <= u32::MAX.into() {
-        buf.push(254);
-        buf.extend_from_slice(&(int as u32).to_le_bytes());
-    } else {
-        buf.push(255);
-        buf.extend_from_slice(&int.to_le_bytes());
-    } 
+        buf.write_all(&[254])?;
+        buf.write_all(&(int as u16).to_le_bytes())?;
+    } else if int <= u32::MAX.try_into().unwrap() {
+        buf.write_all(&[255])?;
+        buf.write_all(&(int as u32).to_le_bytes())?;
+    }
+    Ok(())
+}
+
+#[test]
+fn test_encode_int() {
+    use std::io::Seek;
+    
+    let mut buf = Cursor::new(Vec::new());
+    encode_int(124, &mut buf).unwrap();
+    buf.rewind().unwrap();
+    assert_eq!(decode_int(&mut buf).unwrap(), 124);
+    buf.rewind().unwrap();
+    
+    encode_int(43123, &mut buf).unwrap();
+    buf.rewind().unwrap();
+    assert_eq!(decode_int(&mut buf).unwrap(), 43123);
+    buf.rewind().unwrap();
+    
+    encode_int(3194105786, &mut buf).unwrap();
+    buf.rewind().unwrap();
+    assert_eq!(decode_int(&mut buf).unwrap(), 3194105786);
 }
 
 #[derive(Debug)]
@@ -66,31 +87,32 @@ where
     fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
     where
         Self: 'a {
-        let (len, mut offset) = decode_int(data, 0);
-        let len = len as usize;
+        let mut buf = Cursor::new(data);
+        let len = decode_int(&mut buf).unwrap();
         let mut map = HashMap::with_capacity(len);
 
         for _ in 0..len {
             let key_len = K::fixed_width()
                 .unwrap_or_else(|| {
-                    let (key_len, key_size) = decode_int(data, offset);
-                    offset += key_size;
-                    key_len as usize
+                    decode_int(&mut buf).unwrap()
                 });
             // decode the key
-            let key = K::from_bytes(&data[offset..offset+key_len]);
+            let p = buf.position() as usize;
+            let key = K::from_bytes(&data[p..p + key_len]);
+            buf.set_position((p + key_len) as u64);
+            
             let val_len = V::fixed_width()
                 .unwrap_or_else(|| {
-                    let (val_len, val_size) = decode_int(data, offset);
-                    offset += val_size;
-                    val_len as usize
+                    decode_int(&mut buf).unwrap()
                 });
-            let val = V::from_bytes(&data[offset..offset+val_len]);
+            let p = buf.position() as usize;
+            let val = V::from_bytes(&data[p..p + val_len]);
+            buf.set_position((p + val_len) as u64);
 
             map.insert(key, val);
         }
-        
-        todo!()
+
+        map
     }
 
     fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
@@ -100,22 +122,24 @@ where
         let len = value.len();
         // guesstimation
         let mut buf = Vec::with_capacity(len * 2);
-        encode_int(len as u64, &mut buf);
+        encode_int(len, &mut buf).unwrap();
 
         for (k, v) in value.into_iter() {
-            let key_bytes = dbg!(K::as_bytes(k));
-            let val_bytes = dbg!(V::as_bytes(v));
+            let key_bytes = K::as_bytes(k);
+            let key_ref = key_bytes.as_ref();
+            let val_bytes = V::as_bytes(v);
+            let val_ref = val_bytes.as_ref();
 
             // we need to encode the length if it's not fixed
             if K::fixed_width().is_none() {
-                encode_int(key_bytes.as_ref().len() as u64, &mut buf);
+                encode_int(key_ref.len(), &mut buf).unwrap();
             }
-            buf.extend_from_slice(key_bytes.as_ref());
+            buf.extend_from_slice(key_ref);
             
             if V::fixed_width().is_none() {
-                encode_int(val_bytes.as_ref().len() as u64, &mut buf);
+                encode_int(val_ref.len(), &mut buf).unwrap();
             }
-            buf.extend_from_slice(val_bytes.as_ref());
+            buf.extend_from_slice(val_ref);
         }
 
         buf
