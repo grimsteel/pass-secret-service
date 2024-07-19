@@ -171,12 +171,10 @@ impl Service<'static> {
     async fn read_alias(&self, name: String) -> Result<ObjectPath> {
         let alias = slugify(&name);
 
-        if let Some(target) = self
+        if let Some(target) = collection_path(self
             .store
             .get_alias(Arc::new(alias))
-            .await?
-            .as_ref()
-            .and_then(collection_path)
+            .await?)
         {
             Ok(target)
         } else {
@@ -199,7 +197,7 @@ impl Service<'static> {
         // remove the alias at this point
         try_interface(object_server.remove::<Collection, _>(&alias_path).await)?;
 
-        if let Some(old_target) = self.store.get_alias(alias.clone()).await? {
+        if let Ok(old_target) = self.store.get_alias(alias.clone()).await {
             let secrets = self.store.list_secrets(&old_target).await?;
 
             for secret in secrets {

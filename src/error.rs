@@ -118,13 +118,23 @@ impl<T, E: Into<redb::Error>> IntoResult<T> for std::result::Result<T, E> {
     }
 }
 
+pub trait OptionNoneNotFound<T> {
+    fn into_not_found(self) -> Result<T>;
+}
+
+impl<T> OptionNoneNotFound<T> for Option<T> {
+    fn into_not_found(self) -> Result<T> {
+        self.ok_or(io::Error::from(io::ErrorKind::NotFound).into())
+    }
+}
+
 macro_rules! ignore_nonexistent_table {
-    ($expression:expr, $default:expr) => {
+    ($expression:expr) => {
         match $expression {
             Ok(t) => t,
             // table does not exist yet - that's ok
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok($default),
-            Err(e) => return Err(e.into()),
+            Err(redb::TableError::TableDoesNotExist(_)) => return Err(io::Error::from(io::ErrorKind::NotFound).into()),
+            Err(e) => return Err(e).into_result(),
         }
     };
 }
