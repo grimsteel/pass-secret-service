@@ -238,7 +238,9 @@ impl<'a> SecretStore<'a> {
             .collect()
     }
 
+    /// create a collection, with an optional label and alias
     /// returns the created collection name
+    /// if `label` is `None`, the collection will be called "Unttiled Collection"
     pub async fn create_collection(
         &self,
         label: Option<String>,
@@ -318,6 +320,7 @@ impl<'a> SecretStore<'a> {
         Ok(collection_id)
     }
 
+    /// search all collections for secrets matching the given attributes
     pub async fn search_all_collections(
         &self,
         attributes: HashMap<String, String>,
@@ -338,6 +341,7 @@ impl<'a> SecretStore<'a> {
         .unwrap()?)
     }
 
+    /// search the specific collection for secrets matching the given attributes
     pub async fn search_collection(
         &self,
         collection_id: Arc<String>,
@@ -356,12 +360,87 @@ impl<'a> SecretStore<'a> {
         .unwrap()?)
     }
 
+    /// get the filesystem metadata for this collection
     pub async fn stat_collection(&self, collection_id: &str) -> Result<Metadata> {
         // just use the attributes db file rather than actually calculating the last modified date
         let collection_path = Path::new(PASS_SUBDIR)
             .join(&collection_id)
             .join(ATTRIBUTES_DB);
         Ok(self.pass.stat_file(collection_path).await?)
+    }
+
+    /// decrypt a secret stored in the given collection with the given id
+    /// if can_prompt is true, a gpg prompt may show
+    pub async fn read_secret(&self, collection_id: Arc<String>, secret_id: Arc<String>, can_prompt: bool) -> Result<Vec<u8>> {
+        let secret_path = Path::new(PASS_SUBDIR)
+            .join(&*collection_id)
+            .join(&*secret_id);
+
+        Ok(self.pass.read_password(secret_path, can_prompt).await?)
+    }
+
+    /// read the attributes for the given secret
+    pub async fn read_secret_attrs(&self, collection_id: Arc<String>, secret_id: Arc<String>) -> Result<HashMap<String, String>> {
+        // delete the attributes
+        let collections = self.collection_dbs.clone();
+        Ok(spawn_blocking(move || -> RedbResult<_> {
+            let cols = collections.blocking_read();
+            if let Some(db) = cols.get(&*collection_id) {
+                let tx = db.begin_read()?;
+                let attributes_table_reverse =  ignore_nonexistent_table!(tx.open_table(ATTRIBUTES_TABLE_REVERSE), HashMap::new());
+
+                let secret_id = secret_id.as_str();
+                
+                if let Some(attrs) = attributes_table_reverse.get(secret_id)? {
+                    let attrs = attrs.value();
+                    return Ok(attrs.into_iter()
+                        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                        .collect());
+                }
+            }
+            // it's fine if the DB doesn't exist
+
+            Ok(HashMap::new())
+        }).await.unwrap()?)
+    }
+
+    /// remove a secret and its attributes
+    pub async fn delete_secret(&self, collection_id: Arc<String>, secret_id: Arc<String>) -> Result {
+        let secret_path = Path::new(PASS_SUBDIR)
+            .join(&*collection_id)
+            .join(&*secret_id);
+
+        // delete the password
+        self.pass.delete_password(secret_path).await?;
+
+        // delete the attributes
+        let collections = self.collection_dbs.clone();
+        spawn_blocking(move || -> RedbResult<()> {
+            let cols = collections.blocking_read();
+            if let Some(db) = cols.get(&*collection_id) {
+                let tx = db.begin_write()?;
+                let mut attributes_table = tx.open_multimap_table(ATTRIBUTES_TABLE)?;
+                let mut attributes_table_reverse = tx.open_table(ATTRIBUTES_TABLE_REVERSE)?;
+
+                let secret_id = secret_id.as_str();
+                
+                if let Some(attrs) = attributes_table_reverse.remove(secret_id)? {
+                    let attrs = attrs.value();
+                    for (k, v) in attrs {
+                        attributes_table.remove((k, v), secret_id)?;
+                    }
+                };
+
+                drop(attributes_table);
+                drop(attributes_table_reverse);
+                tx.commit()?;
+            }
+            // it's fine if the DB doesn't exist
+
+            Ok(())
+        }).await.unwrap()?;
+
+        Ok(())
     }
 }
 
@@ -425,28 +504,4 @@ impl SecretStore<'static> {
 
         Ok(())
     }
-
-    /*pub async fn delete_secret(&self, collection_id: Arc<String>, secret_id: Arc<String>) {
-        let secret_path = Path::new(PASS_SUBDIR)
-            .join(&*collection_id)
-            .join(&*secret_id);
-
-        // delete the password
-        self.pass.delete_password(secret_path).await?;
-
-        // delete the attributes
-        let collections = self.collection_dbs.clone();
-        spawn_blocking(move || -> RedbResult<()> {
-            let cols = collections.blocking_read();
-            if let Some(db) = cols.get(&*collection_id) {
-                let tx = db.begin_write()?;
-                let mut attributes_table = tx.open_multimap_table(ATTRIBUTES_TABLE)?;
-                let mut attributes_table_reverse = tx.open_table(ATTRIBUTES_TABLE_REVERSE).into_result()?;
-                //attributes_table
-            }
-            // it's fine if the DB doesn't exist
-        }).await.unwrap()?;
-
-        Ok(())
-    }*/
 }

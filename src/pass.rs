@@ -68,16 +68,37 @@ impl PasswordStore {
         path
     }
 
+    fn make_gpg_process(&self) -> Command {
+        let mut command = Command::new("gpg");
+
+        // apply the gpg opts
+        if let Some(opts) = &self.gpg_opts {
+            command.args(opts.split_ascii_whitespace());
+        }
+
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped());
+
+        command
+    }
+
     /// Read a single password at the given path
-    pub async fn read_password(&self, path: impl AsRef<Path>) -> Result<Vec<u8>> {
+    pub async fn read_password(&self, path: impl AsRef<Path>, can_prompt: bool) -> Result<Vec<u8>> {
         let contents = read(self.get_full_secret_path(path)).await?;
 
-        let mut process = Command::new("gpg")
+        let mut command = self.make_gpg_process();
+
+        if !can_prompt {
+            // don't activate pinentry if we can't prompt
+            command.arg("--pinentry-mode=error");
+        }
+        
+        command
             .arg("--decrypt")
-            .arg("-")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()?;
+            .arg("-");
+        
+        let mut process = command.spawn()?;
 
         let mut stdin = process.stdin.take().expect("child has stdin");
 
@@ -132,13 +153,11 @@ impl PasswordStore {
 
         let gpg_id = self.get_gpg_id(dir).await?;
 
-        let mut process = Command::new("gpg")
+        let mut process = self.make_gpg_process()
             .arg("--recipient")
             .arg(gpg_id)
             .arg("--encrypt")
             .arg("-")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
             .spawn()?;
 
         let mut stdin = process.stdin.take().expect("child has stdin");
