@@ -10,10 +10,12 @@ use zbus::{
 use crate::{error::Result, secret_store::SecretStore};
 
 use super::{
-    item::Item, prompt::Prompt, utils::{
+    item::Item,
+    prompt::Prompt,
+    utils::{
         alias_path, collection_path, secret_alias_path, secret_path, try_interface, Secret,
         EMPTY_PATH,
-    }
+    },
 };
 
 #[derive(Clone, Debug)]
@@ -88,35 +90,41 @@ impl Collection<'static> {
         properties: HashMap<String, OwnedValue>,
         secret: Secret,
         replace: bool,
-        
     ) -> Result<(ObjectPath, ObjectPath)> {
-        let label = dbg!(properties.get("org.freedesktop.Secret.Item.Label")
+        let label = dbg!(properties
+            .get("org.freedesktop.Secret.Item.Label")
             .and_then(|l| l.downcast_ref::<String>().ok()));
-        let attrs = dbg!(properties.get("org.freedesktop.Secret.Item.Attributes")
-                         .and_then(|a| a.downcast_ref::<Dict>().ok())
-                         .and_then(|a| HashMap::<String, String>::try_from(a).ok())
-                         .unwrap_or_default()
-        );
+        let attrs = dbg!(properties
+            .get("org.freedesktop.Secret.Item.Attributes")
+            .and_then(|a| a.downcast_ref::<Dict>().ok())
+            .and_then(|a| HashMap::<String, String>::try_from(a).ok())
+            .unwrap_or_default());
         let attrs = Arc::new(attrs);
 
         // TODO: actual secret decoding w/ sessions
         let secret_data = secret.value;
 
         let secret_id = if replace {
-            
             // replace the secret with the matching attrs
-            let matching_secret = self.store.search_collection(self.id.clone(), attrs.clone()).await?;
+            let matching_secret = self
+                .store
+                .search_collection(self.id.clone(), attrs.clone())
+                .await?;
             if let Some(secret_id) = matching_secret.into_iter().nth(0) {
                 // TODO: update label and secret
-                
+
                 secret_id
             } else {
-                self.store.create_secret(self.id.clone(), label, secret_data, attrs).await?
+                self.store
+                    .create_secret(self.id.clone(), label, secret_data, attrs)
+                    .await?
             }
         } else {
-            self.store.create_secret(self.id.clone(), label, secret_data, attrs).await?
+            self.store
+                .create_secret(self.id.clone(), label, secret_data, attrs)
+                .await?
         };
-            
+
         let path = secret_path(&*self.id, &secret_id).unwrap();
 
         // no prompt needed for GPG encryption
@@ -137,10 +145,7 @@ impl Collection<'static> {
 
     #[zbus(property)]
     async fn label(&self) -> fdo::Result<String> {
-        Ok(self
-            .store
-            .get_label(self.id.clone())
-            .await?)
+        Ok(self.store.get_label(self.id.clone()).await?)
     }
 
     #[zbus(property)]

@@ -47,4 +47,3 @@ pub struct Secret {
     pub value: Vec<u8>,
     pub content_type: String,
 }
-

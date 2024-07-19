@@ -171,11 +171,7 @@ impl Service<'static> {
     async fn read_alias(&self, name: String) -> Result<ObjectPath> {
         let alias = slugify(&name);
 
-        if let Some(target) = collection_path(self
-            .store
-            .get_alias(Arc::new(alias))
-            .await?)
-        {
+        if let Some(target) = collection_path(self.store.get_alias(Arc::new(alias)).await?) {
             Ok(target)
         } else {
             Ok(EMPTY_PATH)

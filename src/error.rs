@@ -133,7 +133,9 @@ macro_rules! ignore_nonexistent_table {
         match $expression {
             Ok(t) => t,
             // table does not exist yet - that's ok
-            Err(redb::TableError::TableDoesNotExist(_)) => return Err(io::Error::from(io::ErrorKind::NotFound).into()),
+            Err(redb::TableError::TableDoesNotExist(_)) => {
+                return Err(io::Error::from(io::ErrorKind::NotFound).into())
+            }
             Err(e) => return Err(e).into_result(),
         }
     };
