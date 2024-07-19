@@ -317,14 +317,16 @@ impl Service<'static> {
 
 #[interface(name = "org.freedesktop.Secret.Collection")]
 impl Collection<'static> {
-    async fn delete(&self) -> ObjectPath {
+    async fn delete(&self) -> Result<ObjectPath> {
+        self.store.delete_collection(self.id.clone()).await?;
+        
         // notify the service
         let _ = self
             .tx
             .send(Message::CollectionDeleted(self.id.clone()))
             .await;
 
-        EMPTY_PATH
+        Ok(EMPTY_PATH)
     }
 
     async fn search_items(&self, attributes: HashMap<String, String>) -> Result<Vec<ObjectPath>> {

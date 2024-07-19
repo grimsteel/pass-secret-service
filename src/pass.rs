@@ -7,7 +7,7 @@ use std::{
     process::Stdio,
 };
 use tokio::{
-    fs::{metadata, read, read_dir, read_to_string, remove_file, DirBuilder, File, OpenOptions},
+    fs::{metadata, read, read_dir, read_to_string, remove_dir_all, remove_file, DirBuilder, File, OpenOptions},
     io::AsyncWriteExt,
     process::Command,
 };
@@ -238,5 +238,10 @@ impl PasswordStore {
     /// make a dir and all its parents
     pub async fn make_dir(&self, dir: impl AsRef<Path>) -> Result {
         self.ensure_dirs(self.directory.join(dir)).await
+    }
+
+    /// recursively remove a dir
+    pub async fn remove_dir(&self, dir: impl AsRef<Path>) -> Result {
+        Ok(remove_dir_all(self.directory.join(dir)).await?)
     }
 }

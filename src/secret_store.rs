@@ -1,7 +1,7 @@
 use std::{borrow::Cow, collections::HashMap, fmt::Debug, fs::Metadata, path::Path, sync::Arc};
 
 use nanoid::nanoid;
-use redb::{Database, MultimapTableDefinition, ReadableTable, TableDefinition};
+use redb::{Database, MultimapTableDefinition, ReadableMultimapTable, ReadableTable, TableDefinition};
 use tokio::{runtime::Handle, sync::RwLock, task::spawn_blocking};
 
 use crate::{
@@ -22,6 +22,8 @@ const ATTRIBUTES_TABLE_REVERSE: TableDefinition<&str, RedbHashMap<&str, &str>> =
 const LABELS_TABLE: TableDefinition<&str, &str> = TableDefinition::new("labels");
 // collection alias -> id
 const ALIASES_TABLE: TableDefinition<&str, &str> = TableDefinition::new("aliases");
+// id -> alises
+const ALIASES_TABLE_REVERSE: MultimapTableDefinition<&str, &str> = MultimapTableDefinition::new("aliases_reverse");
 
 const PASS_SUBDIR: &'static str = "secret-service";
 const ATTRIBUTES_DB: &'static str = "attributes.redb";
@@ -223,15 +225,23 @@ impl<'a> SecretStore<'a> {
         Ok(spawn_blocking(move || -> RedbResult<_> {
             // open the aliases table
             let tx = db.begin_write()?;
-            let mut table = tx.open_table(ALIASES_TABLE)?;
+            let mut aliases = tx.open_table(ALIASES_TABLE)?;
+            let mut aliases_reverse = tx.open_multimap_table(ALIASES_TABLE_REVERSE)?;
+
+            // remove this alias from its old target's alias list
+            if let Some(old_target) = aliases.get(alias.as_str())? {
+                aliases_reverse.remove(old_target.value(), alias.as_str());
+            }
 
             if let Some(target) = target {
-                table.insert(alias.as_str(), target.as_str())?;
+                aliases.insert(alias.as_str(), target.as_str())?;
+                aliases_reverse.insert(target.as_str(), alias.as_str())?;
             } else {
                 // remove it
-                table.remove(alias.as_str())?;
+                aliases.remove(alias.as_str())?;
             }
-            drop(table);
+            drop(aliases);
+            drop(aliases_reverse);
             tx.commit()?;
             Ok(())
         })
@@ -263,6 +273,7 @@ impl<'a> SecretStore<'a> {
         let collection_id = spawn_blocking(move || -> RedbResult<_> {
             let tx = db.begin_write()?;
             let mut aliases = tx.open_table(ALIASES_TABLE)?;
+            let mut aliases_reverse = tx.open_multimap_table(ALIASES_TABLE_REVERSE)?;
             let mut labels = tx.open_table(LABELS_TABLE)?;
 
             let had_provided_label = label.is_some();
@@ -297,7 +308,11 @@ impl<'a> SecretStore<'a> {
 
                 // set the label and alias
                 if let Some(alias) = alias.as_ref() {
-                    aliases.insert(alias.as_str(), id.as_str())?;
+                    // remove this alias from its old target's alias list
+                    if let Some(old_target) = aliases.insert(alias.as_str(), id.as_str())? {
+                        aliases_reverse.remove(old_target.value(), alias.as_str())?;
+                    }
+                    aliases_reverse.insert(id.as_str(), alias.as_str())?;
                 }
                 labels.insert(id.as_str(), label.as_ref())?;
 
@@ -305,6 +320,7 @@ impl<'a> SecretStore<'a> {
             };
 
             drop(aliases);
+            drop(aliases_reverse);
             drop(labels);
             tx.commit()?;
 
@@ -328,6 +344,47 @@ impl<'a> SecretStore<'a> {
         }
 
         Ok(collection_id)
+    }
+
+    /// delete a collection and all its secrets
+    pub async fn delete_collection(
+        &self,
+        collection_id: Arc<String>
+    ) -> Result {
+        // remove it from the collection db map
+        self.collection_dbs.write().await.remove(&*collection_id);
+        // remove the dir
+        let collection_path = Path::new(PASS_SUBDIR).join(&*collection_id);
+        self.pass.remove_dir(collection_path).await?;
+
+        let db = self.db.clone();
+
+        // remove entries from our db
+        spawn_blocking(move || -> RedbResult<_> {
+            let tx = db.begin_write()?;
+
+            let mut aliases = tx.open_table(ALIASES_TABLE)?;
+            let mut aliases_reverse = tx.open_multimap_table(ALIASES_TABLE_REVERSE)?;
+            let mut labels = tx.open_table(LABELS_TABLE)?;
+
+            // remove each alias
+            for alias in aliases_reverse.remove_all(collection_id.as_str())? {
+                aliases.remove(alias?.value())?;
+            }
+
+            // remove the label
+            labels.remove(collection_id.as_str())?;
+
+            drop(aliases);
+            drop(aliases_reverse);
+            drop(labels);
+
+            tx.commit()?;
+
+            Ok(())
+        }).await.unwrap()?;
+
+        Ok(())
     }
 
     /// search all collections for secrets matching the given attributes
