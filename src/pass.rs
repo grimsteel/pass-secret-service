@@ -76,9 +76,7 @@ impl PasswordStore {
             command.args(opts.split_ascii_whitespace());
         }
 
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped());
+        command.stdin(Stdio::piped()).stdout(Stdio::piped());
 
         command
     }
@@ -93,11 +91,9 @@ impl PasswordStore {
             // don't activate pinentry if we can't prompt
             command.arg("--pinentry-mode=error");
         }
-        
-        command
-            .arg("--decrypt")
-            .arg("-");
-        
+
+        command.arg("--decrypt").arg("-");
+
         let mut process = command.spawn()?;
 
         let mut stdin = process.stdin.take().expect("child has stdin");
@@ -153,7 +149,8 @@ impl PasswordStore {
 
         let gpg_id = self.get_gpg_id(dir).await?;
 
-        let mut process = self.make_gpg_process()
+        let mut process = self
+            .make_gpg_process()
             .arg("--recipient")
             .arg(gpg_id)
             .arg("--encrypt")
@@ -190,7 +187,7 @@ impl PasswordStore {
         match remove_file(full_path).await {
             Ok(_) => Ok(()),
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e.into())
+            Err(e) => Err(e.into()),
         }
     }
 

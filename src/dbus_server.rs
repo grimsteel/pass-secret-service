@@ -252,7 +252,7 @@ impl Service<'static> {
         try_interface(object_server.remove::<Collection, _>(&alias_path).await)?;
 
         // TODO: Remove items
-        
+
         let target_collection_id = if collection == EMPTY_PATH {
             None
         } else {

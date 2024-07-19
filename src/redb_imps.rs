@@ -1,4 +1,10 @@
-use std::{any::type_name, collections::HashMap, fmt::Debug, hash::Hash, io::{self, Cursor, Read, Write}};
+use std::{
+    any::type_name,
+    collections::HashMap,
+    fmt::Debug,
+    hash::Hash,
+    io::{self, Cursor, Read, Write},
+};
 
 use redb::{TypeName, Value};
 
@@ -11,26 +17,27 @@ fn decode_int<T: Read>(data: &mut T) -> io::Result<usize> {
             let mut int_buf = [0, 0, 0, 0];
             data.read_exact(&mut int_buf)?;
             Ok(u32::from_le_bytes(int_buf) as usize)
-        },
+        }
         254 => {
             let mut short_buf = [0, 0];
             data.read_exact(&mut short_buf)?;
             Ok(u16::from_le_bytes(short_buf) as usize)
-        },
-        num => {
-            Ok(num as usize)
         }
+        num => Ok(num as usize),
     }
 }
 
 #[test]
-fn test_decode_int()  {
+fn test_decode_int() {
     let four: [u8; 1] = [4];
     assert_eq!(decode_int(&mut four.as_ref()).unwrap(), 4);
     let short: [u8; 3] = [254, 55, 187];
     assert_eq!(decode_int(&mut short.as_ref()).unwrap(), 55 | (187 << 8));
     let int: [u8; 5] = [255, 123, 254, 2, 3];
-    assert_eq!(decode_int(&mut int.as_ref()).unwrap(), 123 | (254 << 8) | (2 << 16) | (3 << 24));
+    assert_eq!(
+        decode_int(&mut int.as_ref()).unwrap(),
+        123 | (254 << 8) | (2 << 16) | (3 << 24)
+    );
 }
 
 /// encodes an int to the end of a buffer
@@ -50,18 +57,18 @@ fn encode_int<T: Write>(int: usize, buf: &mut T) -> io::Result<()> {
 #[test]
 fn test_encode_int() {
     use std::io::Seek;
-    
+
     let mut buf = Cursor::new(Vec::new());
     encode_int(124, &mut buf).unwrap();
     buf.rewind().unwrap();
     assert_eq!(decode_int(&mut buf).unwrap(), 124);
     buf.rewind().unwrap();
-    
+
     encode_int(43123, &mut buf).unwrap();
     buf.rewind().unwrap();
     assert_eq!(decode_int(&mut buf).unwrap(), 43123);
     buf.rewind().unwrap();
-    
+
     encode_int(3194105786, &mut buf).unwrap();
     buf.rewind().unwrap();
     assert_eq!(decode_int(&mut buf).unwrap(), 3194105786);
@@ -72,7 +79,9 @@ pub struct RedbHashMap<K: Debug, V: Debug>(HashMap<K, V>);
 
 impl<K, V> Value for RedbHashMap<K, V>
 where
-    K: Value, V: Value, for<'a> K::SelfType<'a>: Hash + Eq, for<'a> K::AsBytes<'a>: Debug, for<'a> V::AsBytes<'a>: Debug
+    K: Value,
+    V: Value,
+    for<'a> K::SelfType<'a>: Hash + Eq,
 {
     type SelfType<'a> = HashMap<K::SelfType<'a>, V::SelfType<'a>>
     where
@@ -82,29 +91,26 @@ where
     where
         Self: 'a;
 
-    fn fixed_width() -> Option<usize> { None }
+    fn fixed_width() -> Option<usize> {
+        None
+    }
 
     fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
     where
-        Self: 'a {
+        Self: 'a,
+    {
         let mut buf = Cursor::new(data);
         let len = decode_int(&mut buf).unwrap();
         let mut map = HashMap::with_capacity(len);
 
         for _ in 0..len {
-            let key_len = K::fixed_width()
-                .unwrap_or_else(|| {
-                    decode_int(&mut buf).unwrap()
-                });
+            let key_len = K::fixed_width().unwrap_or_else(|| decode_int(&mut buf).unwrap());
             // decode the key
             let p = buf.position() as usize;
             let key = K::from_bytes(&data[p..p + key_len]);
             buf.set_position((p + key_len) as u64);
-            
-            let val_len = V::fixed_width()
-                .unwrap_or_else(|| {
-                    decode_int(&mut buf).unwrap()
-                });
+
+            let val_len = V::fixed_width().unwrap_or_else(|| decode_int(&mut buf).unwrap());
             let p = buf.position() as usize;
             let val = V::from_bytes(&data[p..p + val_len]);
             buf.set_position((p + val_len) as u64);
@@ -118,7 +124,8 @@ where
     fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
     where
         Self: 'a,
-        Self: 'b {
+        Self: 'b,
+    {
         let len = value.len();
         // guesstimation
         let mut buf = Vec::with_capacity(len * 2);
@@ -135,7 +142,7 @@ where
                 encode_int(key_ref.len(), &mut buf).unwrap();
             }
             buf.extend_from_slice(key_ref);
-            
+
             if V::fixed_width().is_none() {
                 encode_int(val_ref.len(), &mut buf).unwrap();
             }
@@ -146,20 +153,19 @@ where
     }
 
     fn type_name() -> TypeName {
-        TypeName::new(&format!("HashMap<{}, {}>", type_name::<K>(), type_name::<V>()))
+        TypeName::new(&format!(
+            "HashMap<{}, {}>",
+            type_name::<K>(),
+            type_name::<V>()
+        ))
     }
 }
 
 #[test]
 fn test_redb_hashmap() {
-    let map = HashMap::from([
-        ("hello", 5),
-        ("foo", 4),
-        ("bar", 3)
-    ]);
+    let map = HashMap::from([("hello", 5), ("foo", 4), ("bar", 3)]);
 
     let serialized = RedbHashMap::<&str, u8>::as_bytes(&map);
     let deserialized = RedbHashMap::<&str, u8>::from_bytes(&serialized);
     assert_eq!(map, deserialized);
-    
 }

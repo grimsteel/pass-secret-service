@@ -1,10 +1,23 @@
-use std::{any::type_name, borrow::Cow, collections::{HashMap, HashSet}, fmt::Debug, fs::Metadata, hash::Hash, path::Path, sync::Arc};
+use std::{
+    any::type_name,
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+    fs::Metadata,
+    hash::Hash,
+    path::Path,
+    sync::Arc,
+};
 
 use nanoid::nanoid;
 use redb::{Database, MultimapTableDefinition, ReadableTable, TableDefinition};
 use tokio::{runtime::Handle, sync::RwLock, task::spawn_blocking};
 
-use crate::{error::{ignore_nonexistent_table, IntoResult, Result}, pass::PasswordStore, redb_imps::RedbHashMap};
+use crate::{
+    error::{ignore_nonexistent_table, IntoResult, Result},
+    pass::PasswordStore,
+    redb_imps::RedbHashMap,
+};
 
 // Collection tables
 
@@ -68,38 +81,44 @@ pub fn search_collection(
     attrs: &HashMap<String, String>,
     db: &Database,
 ) -> RedbResult<Vec<String>> {
-    if attrs.len() == 0 { return Ok(vec![]) };
-    
+    if attrs.len() == 0 {
+        return Ok(vec![]);
+    };
+
     let tx = db.begin_read()?;
     let attributes = ignore_nonexistent_table!(tx.open_multimap_table(ATTRIBUTES_TABLE), vec![]);
-    let attributes_reverse = ignore_nonexistent_table!(tx.open_table(ATTRIBUTES_TABLE_REVERSE), vec![]);
+    let attributes_reverse =
+        ignore_nonexistent_table!(tx.open_table(ATTRIBUTES_TABLE_REVERSE), vec![]);
 
     let mut attr_iter = attrs.into_iter();
 
     // get the secrets which fit the first K/V attr pair
-    let initial_matches =
-        attributes.get(
-            attr_iter.next().map(|(k, v)| (k.as_str(), v.as_str())).unwrap()
-        )?;
+    let initial_matches = attributes.get(
+        attr_iter
+            .next()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .unwrap(),
+    )?;
 
     // filter the items from there
-    initial_matches.map(|r| -> RedbResult<_> {
-        let secret_id_guard = r?;
-        let secret_id = secret_id_guard.value();
-        // get the attributes for this secret
-        if let Some(secret_attrs) = attributes_reverse.get(secret_id)? {
-            let secret_attrs = secret_attrs.value();
-            // make sure it's a subset of the remaining `attrs`
-            for (k, v) in attr_iter.clone() {
-                if secret_attrs.get(k.as_str()) != Some(&v.as_str()) {
-                    return Ok(None)
-                };
+    initial_matches
+        .map(|r| -> RedbResult<_> {
+            let secret_id_guard = r?;
+            let secret_id = secret_id_guard.value();
+            // get the attributes for this secret
+            if let Some(secret_attrs) = attributes_reverse.get(secret_id)? {
+                let secret_attrs = secret_attrs.value();
+                // make sure it's a subset of the remaining `attrs`
+                for (k, v) in attr_iter.clone() {
+                    if secret_attrs.get(k.as_str()) != Some(&v.as_str()) {
+                        return Ok(None);
+                    };
+                }
+                Ok(Some(secret_id.to_owned()))
+            } else {
+                Ok(None)
             }
-            Ok(Some(secret_id.to_owned()))
-        } else {
-            Ok(None)
-        }
-    })
+        })
         .filter_map(|item| item.transpose())
         .collect::<RedbResult<Vec<_>>>()
 }
@@ -371,7 +390,12 @@ impl<'a> SecretStore<'a> {
 
     /// decrypt a secret stored in the given collection with the given id
     /// if can_prompt is true, a gpg prompt may show
-    pub async fn read_secret(&self, collection_id: Arc<String>, secret_id: Arc<String>, can_prompt: bool) -> Result<Vec<u8>> {
+    pub async fn read_secret(
+        &self,
+        collection_id: Arc<String>,
+        secret_id: Arc<String>,
+        can_prompt: bool,
+    ) -> Result<Vec<u8>> {
         let secret_path = Path::new(PASS_SUBDIR)
             .join(&*collection_id)
             .join(&*secret_id);
@@ -380,20 +404,28 @@ impl<'a> SecretStore<'a> {
     }
 
     /// read the attributes for the given secret
-    pub async fn read_secret_attrs(&self, collection_id: Arc<String>, secret_id: Arc<String>) -> Result<HashMap<String, String>> {
+    pub async fn read_secret_attrs(
+        &self,
+        collection_id: Arc<String>,
+        secret_id: Arc<String>,
+    ) -> Result<HashMap<String, String>> {
         // delete the attributes
         let collections = self.collection_dbs.clone();
         Ok(spawn_blocking(move || -> RedbResult<_> {
             let cols = collections.blocking_read();
             if let Some(db) = cols.get(&*collection_id) {
                 let tx = db.begin_read()?;
-                let attributes_table_reverse =  ignore_nonexistent_table!(tx.open_table(ATTRIBUTES_TABLE_REVERSE), HashMap::new());
+                let attributes_table_reverse = ignore_nonexistent_table!(
+                    tx.open_table(ATTRIBUTES_TABLE_REVERSE),
+                    HashMap::new()
+                );
 
                 let secret_id = secret_id.as_str();
-                
+
                 if let Some(attrs) = attributes_table_reverse.get(secret_id)? {
                     let attrs = attrs.value();
-                    return Ok(attrs.into_iter()
+                    return Ok(attrs
+                        .into_iter()
                         .map(|(k, v)| (k.to_owned(), v.to_owned()))
                         .collect());
                 }
@@ -401,11 +433,17 @@ impl<'a> SecretStore<'a> {
             // it's fine if the DB doesn't exist
 
             Ok(HashMap::new())
-        }).await.unwrap()?)
+        })
+        .await
+        .unwrap()?)
     }
 
     /// remove a secret and its attributes
-    pub async fn delete_secret(&self, collection_id: Arc<String>, secret_id: Arc<String>) -> Result {
+    pub async fn delete_secret(
+        &self,
+        collection_id: Arc<String>,
+        secret_id: Arc<String>,
+    ) -> Result {
         let secret_path = Path::new(PASS_SUBDIR)
             .join(&*collection_id)
             .join(&*secret_id);
@@ -423,7 +461,7 @@ impl<'a> SecretStore<'a> {
                 let mut attributes_table_reverse = tx.open_table(ATTRIBUTES_TABLE_REVERSE)?;
 
                 let secret_id = secret_id.as_str();
-                
+
                 if let Some(attrs) = attributes_table_reverse.remove(secret_id)? {
                     let attrs = attrs.value();
                     for (k, v) in attrs {
@@ -438,18 +476,24 @@ impl<'a> SecretStore<'a> {
             // it's fine if the DB doesn't exist
 
             Ok(())
-        }).await.unwrap()?;
+        })
+        .await
+        .unwrap()?;
 
         Ok(())
     }
 }
 
 impl SecretStore<'static> {
-    pub async fn write_secret(&self, collection_id: Arc<String>, secret_id: Arc<String>, value: Vec<u8>, attributes: HashMap<String, String>) -> Result {
-        let collection_dir = Path::new(PASS_SUBDIR)
-            .join(&*collection_id);
-        let secret_path = collection_dir
-            .join(&*secret_id);
+    pub async fn write_secret(
+        &self,
+        collection_id: Arc<String>,
+        secret_id: Arc<String>,
+        value: Vec<u8>,
+        attributes: HashMap<String, String>,
+    ) -> Result {
+        let collection_dir = Path::new(PASS_SUBDIR).join(&*collection_id);
+        let secret_path = collection_dir.join(&*secret_id);
 
         // write the password
         self.pass.write_password(secret_path, value).await?;
@@ -462,18 +506,20 @@ impl SecretStore<'static> {
             let mut cols = collections.blocking_write();
 
             // get the db or make a new one
-            let db = if let Some(db) = cols.get(&*collection_id) { db } else {
+            let db = if let Some(db) = cols.get(&*collection_id) {
+                db
+            } else {
                 let db_path = collection_dir.join(ATTRIBUTES_DB);
-                let db = Handle::current().block_on(async move {
-                    open_db(pass_store, db_path).await
-                })?;
+                let db = Handle::current()
+                    .block_on(async move { open_db(pass_store, db_path).await })?;
                 // add it to the map
                 cols.entry((*collection_id).to_owned()).or_insert(db)
             };
 
             let tx = db.begin_write().into_result()?;
             let mut attributes_table = tx.open_multimap_table(ATTRIBUTES_TABLE).into_result()?;
-            let mut attributes_table_reverse = tx.open_table(ATTRIBUTES_TABLE_REVERSE).into_result()?;
+            let mut attributes_table_reverse =
+                tx.open_table(ATTRIBUTES_TABLE_REVERSE).into_result()?;
 
             let value = secret_id.as_str();
 
@@ -491,16 +537,22 @@ impl SecretStore<'static> {
 
             // insert the new attributes
             for (k, v) in &attributes {
-                attributes_table.insert((k.as_str(), v.as_str()), value).into_result()?;
+                attributes_table
+                    .insert((k.as_str(), v.as_str()), value)
+                    .into_result()?;
             }
-            attributes_table_reverse.insert(value, attributes_ref).into_result()?;
+            attributes_table_reverse
+                .insert(value, attributes_ref)
+                .into_result()?;
 
             drop(attributes_table);
             drop(attributes_table_reverse);
             tx.commit().map_err(|e| redb::Error::from(e))?;
 
             Ok(())
-        }).await.unwrap()?;
+        })
+        .await
+        .unwrap()?;
 
         Ok(())
     }

@@ -75,6 +75,6 @@ macro_rules! ignore_nonexistent_table {
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok($default),
             Err(e) => return Err(e.into()),
         }
-    }
+    };
 }
 pub(crate) use ignore_nonexistent_table;
