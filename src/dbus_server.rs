@@ -5,15 +5,11 @@ use std::{
     time::SystemTime,
 };
 
-use tokio::{
-    sync::mpsc::{self, Sender},
-    task,
-};
 use zbus::{
     fdo, interface,
     object_server::SignalContext,
-    zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value},
-    Connection,
+    zvariant::{DeserializeDict, ObjectPath, OwnedObjectPath, OwnedValue, SerializeDict, Type, Value},
+    Connection, ObjectServer,
 };
 
 use crate::{
@@ -39,6 +35,15 @@ fn secret_path<'a, 'b, T: Display + Debug>(
     ))
     .ok()
 }
+fn secret_alias_path<'a, 'b, T: Display + Debug>(
+    alias: T,
+    secret_id: T,
+) -> Option<ObjectPath<'b>> {
+    ObjectPath::try_from(format!(
+        "/org/freedesktop/secrets/aliases/{alias}/{secret_id}"
+    ))
+    .ok()
+}
 fn alias_path<'a, 'b, T: Display>(alias: T) -> Option<ObjectPath<'b>> {
     ObjectPath::try_from(format!("/org/freedesktop/secrets/aliases/{alias}")).ok()
 }
@@ -50,108 +55,93 @@ fn try_interface<T>(result: zbus::Result<T>) -> zbus::Result<Option<T>> {
     }
 }
 
-enum Message {
-    CollectionDeleted(Arc<String>),
+
+#[derive(DeserializeDict, SerializeDict, Type)]
+#[zvariant(signature = "dict")]
+struct Secret {
+    session: OwnedObjectPath,
+    parameters: Vec<u8>,
+    value: Vec<u8>,
+    content_type: String
 }
 
 #[derive(Debug)]
 pub struct Service<'a> {
-    store: SecretStore<'a>,
-    connection: Connection,
-    collection_channel: Sender<Message>,
+    store: SecretStore<'a>
 }
 
 #[derive(Clone, Debug)]
 struct Collection<'a> {
-    tx: Sender<Message>,
     store: SecretStore<'a>,
     id: Arc<String>,
 }
 
+#[derive(Clone, Debug)]
 struct Item;
 struct Session;
-struct Prompt;
+struct Prompt {
+    secret: Vec<u8>,
+    attrs: HashMap<String, String>,
+    label: Option<String>,
+    replace: bool
+}
 
 impl Service<'static> {
     pub async fn init(connection: Connection, pass: &'static PasswordStore) -> Result<Self> {
         let store = SecretStore::new(pass).await?;
-        // setup the collection channel
-        let (tx, mut rx) = mpsc::channel(4);
 
         {
             let object_server = connection.object_server();
 
-            let aliases = store.aliases().await?;
-            let mut aliases_reverse = aliases.into_iter().fold(
-                HashMap::<String, Vec<String>>::new(),
-                |mut map, (alias, target)| {
-                    {
-                        if let Some(items) = map.get_mut(&target) {
-                            items.push(alias);
-                        } else {
-                            map.insert(target, vec![alias]);
-                        }
-                    }
-                    map
-                },
-            );
+            let mut aliases = store.list_all_aliases().await?;
 
             // add existing collections
             for collection in store.collections().await {
-                let collection_aliases = aliases_reverse.remove(&collection).into_iter().flatten();
+                let collection_aliases = aliases.remove(&collection).into_iter().flatten();
                 let path = collection_path(&collection).unwrap();
 
+                let secrets: Vec<_> = store.list_secrets(&collection).await?
+                    .into_iter()
+                    .map(|id| (id, Item))
+                    .collect();
+
+                // add the collection secrets
+                for secret in &secrets {
+                    if let Some(path) = secret_path(&collection, &secret.0) {
+                        object_server.at(path, secret.1.clone()).await?;
+                    }
+                }
+
                 let c = Collection {
-                    tx: tx.clone(),
                     store: store.clone(),
                     id: Arc::new(collection),
                 };
 
                 // add the aliases
                 for alias in collection_aliases {
-                    let path = alias_path(alias).unwrap();
-                    object_server.at(path, c.clone()).await?;
-                }
-
-                object_server.at(path, c).await?;
-
-                // TODO: items
-            }
-        }
-
-        let connection_2 = connection.clone();
-
-        task::spawn(async move {
-            // Handle notifications from the collections
-            let signal_context = SignalContext::new(&connection_2, "/org/freedesktop/secrets")?;
-            let object_server = connection_2.object_server();
-
-            while let Some(msg) = rx.recv().await {
-                match msg {
-                    Message::CollectionDeleted(collection_id) => {
-                        if let Some(path) = collection_path(collection_id) {
-                            // remove the collection
-                            try_interface(object_server.remove::<Collection, _>(&path).await)?;
-                            // emit the signal
-                            Self::collection_deleted(&signal_context, path).await?;
+                    if let Some(path) = alias_path(&alias) {
+                        object_server.at(path, c.clone()).await?;
+                    }
+                    // add the secrets under the alias
+                    for secret in &secrets {
+                        if let Some(path) = secret_alias_path(&alias, &secret.0) {
+                            object_server.at(path, secret.1.clone()).await?;
                         }
                     }
                 }
+                // add the collection
+                object_server.at(path, c).await?;
+               
             }
-
-            zbus::Result::Ok(())
-        });
+        }
 
         Ok(Service {
             store,
-            connection,
-            collection_channel: tx,
         })
     }
 
     fn make_collection(&self, name: String) -> Collection<'static> {
         Collection {
-            tx: self.collection_channel.clone(),
             id: Arc::new(name),
             store: self.store.clone(),
         }
@@ -169,13 +159,12 @@ impl Service<'static> {
         properties: HashMap<String, OwnedValue>,
         alias: String,
         #[zbus(signal_context)] signal: SignalContext<'_>,
+        #[zbus(object_server)] object_server: &ObjectServer
     ) -> Result<(ObjectPath, ObjectPath)> {
         // stringify the labelg
         let label: Option<String> = properties
             .get("org.freedesktop.Secret.Collection.Label")
             .and_then(|v| v.downcast_ref().ok());
-
-        let object_server = self.connection.object_server();
 
         // slugify the alias and handle the case where it's empty
         let alias = slugify(&alias);
@@ -245,7 +234,7 @@ impl Service<'static> {
 
         if let Some(target) = self
             .store
-            .get_alias(alias)
+            .get_alias(Arc::new(alias))
             .await?
             .as_ref()
             .and_then(collection_path)
@@ -256,16 +245,30 @@ impl Service<'static> {
         }
     }
 
-    async fn set_alias(&self, name: String, collection: OwnedObjectPath) -> Result<()> {
-        let alias = slugify(&name);
+    async fn set_alias(
+        &self,
+        name: String,
+        collection: OwnedObjectPath,
+        #[zbus(object_server)] object_server: &ObjectServer
+    ) -> Result<()> {
+        let alias = Arc::new(slugify(&name));
 
         let alias_path = alias_path(&alias).unwrap();
 
         let collection = collection.as_ref();
-        let object_server = self.connection.object_server();
 
         // remove the alias at this point
         try_interface(object_server.remove::<Collection, _>(&alias_path).await)?;
+
+        if let Some(old_target) = self.store.get_alias(alias.clone()).await? {
+            let secrets = self.store.list_secrets(&old_target).await?;
+
+            for secret in secrets {
+                if let Some(path) = secret_alias_path(&*alias, &secret) {
+                    try_interface(object_server.remove::<Item, _>(&path).await)?;
+                }
+            }
+        }
 
         // TODO: Remove items
 
@@ -317,14 +320,48 @@ impl Service<'static> {
 
 #[interface(name = "org.freedesktop.Secret.Collection")]
 impl Collection<'static> {
-    async fn delete(&self) -> Result<ObjectPath> {
-        self.store.delete_collection(self.id.clone()).await?;
+    async fn delete(
+        &self,
+        #[zbus(connection)] connection: &Connection,
+        #[zbus(object_server)] object_server: &ObjectServer
+    ) -> Result<ObjectPath> {
+
+        let secrets = self.store
+            .list_secrets(&*self.id)
+            .await?;
         
-        // notify the service
-        let _ = self
-            .tx
-            .send(Message::CollectionDeleted(self.id.clone()))
-            .await;
+        // remove this collection from the object server
+        if let Some(path) = collection_path(&*self.id) {
+            try_interface(object_server.remove::<Self, _>(&path).await)?;
+
+            // emit the collection deleted event
+            connection.emit_signal(
+                Option::<String>::None,
+                "/org/freedesktop/secrets",
+                "org.freedesktop.Secret.Service",
+                "CollectionDeleted",
+                &(path, )
+            ).await?;
+        }
+        for secret in &secrets {
+            if let Some(path) = secret_path(&*self.id, secret) {
+                try_interface(object_server.remove::<Item, _>(path).await)?;
+            }
+        }
+        // remove all aliases
+        for alias in self.store.list_aliases_for_collection(self.id.clone()).await? {
+            if let Some(path) = alias_path(&alias) {
+                try_interface(object_server.remove::<Self, _>(path).await)?;
+            }
+            for secret in &secrets {
+                if let Some(path) = secret_alias_path(&alias, secret) {
+                    try_interface(object_server.remove::<Item, _>(path).await)?;
+                }
+            }
+        }
+        
+        // delete the collection from the store
+        self.store.delete_collection(self.id.clone()).await?;
 
         Ok(EMPTY_PATH)
     }
@@ -342,9 +379,10 @@ impl Collection<'static> {
     async fn create_item(
         &self,
         properties: HashMap<String, OwnedValue>,
-        secret: (),
+        secret: Secret,
         replace: bool,
     ) -> Result<(ObjectPath, ObjectPath)> {
+        
         todo!()
     }
 

@@ -190,17 +190,24 @@ impl<'a> SecretStore<'a> {
         .unwrap()?)
     }
 
-    pub async fn aliases(&self) -> Result<HashMap<String, String>> {
+    /// returns a hashmap of collection id to vec of aliases
+    pub async fn list_all_aliases(&self) -> Result<HashMap<String, Vec<String>>> {
         let db = self.db.clone();
         Ok(spawn_blocking(move || -> RedbResult<_> {
             // open the aliases table
             let tx = db.begin_read()?;
-            let table = ignore_nonexistent_table!(tx.open_table(ALIASES_TABLE), HashMap::new());
+            let table = ignore_nonexistent_table!(
+                tx.open_multimap_table(ALIASES_TABLE_REVERSE),
+                HashMap::new()
+            );
             table
                 .iter()?
                 .map(|i| {
-                    let (k, v) = i?;
-                    Ok((k.value().into(), v.value().into()))
+                    let (target, aliases) = i?;
+                    let aliases = aliases
+                        .map(|a| RedbResult::Ok(a?.value().to_owned()))
+                        .collect::<RedbResult<Vec<_>>>()?;
+                    Ok((target.value().to_owned(), aliases))
                 })
                 .collect()
         })
@@ -208,7 +215,30 @@ impl<'a> SecretStore<'a> {
         .unwrap()?)
     }
 
-    pub async fn get_alias(&self, alias: String) -> Result<Option<String>> {
+    /// list the aliases that point to a collection
+    pub async fn list_aliases_for_collection(&self, collection_id: Arc<String>) -> Result<Vec<String>> {
+        let collections = self.collection_dbs.clone();
+        Ok(spawn_blocking(move || -> RedbResult<_> {
+            let cols = collections.blocking_read();
+            if let Some(db) = cols.get(&*collection_id) {
+                let tx = db.begin_read()?;
+                let aliases_reverse = ignore_nonexistent_table!(
+                    tx.open_multimap_table(ALIASES_TABLE_REVERSE),
+                    vec![]
+                );
+
+                aliases_reverse.get(collection_id.as_str())?
+                    .map(|el| Ok(el?.value().to_owned()))
+                    .collect::<RedbResult<Vec<_>>>()
+            } else {
+                Ok(vec![])
+            }
+        })
+        .await
+        .unwrap()?)
+    }
+
+    pub async fn get_alias(&self, alias: Arc<String>) -> Result<Option<String>> {
         let db = self.db.clone();
         Ok(spawn_blocking(move || -> RedbResult<_> {
             // open the aliases table
@@ -220,7 +250,7 @@ impl<'a> SecretStore<'a> {
         .unwrap()?)
     }
 
-    pub async fn set_alias(&self, alias: String, target: Option<String>) -> Result {
+    pub async fn set_alias(&self, alias: Arc<String>, target: Option<String>) -> Result {
         let db = self.db.clone();
         Ok(spawn_blocking(move || -> RedbResult<_> {
             // open the aliases table
@@ -230,7 +260,7 @@ impl<'a> SecretStore<'a> {
 
             // remove this alias from its old target's alias list
             if let Some(old_target) = aliases.get(alias.as_str())? {
-                aliases_reverse.remove(old_target.value(), alias.as_str());
+                aliases_reverse.remove(old_target.value(), alias.as_str())?;
             }
 
             if let Some(target) = target {
@@ -546,6 +576,18 @@ impl<'a> SecretStore<'a> {
         .unwrap()?;
 
         Ok(())
+    }
+
+    pub async fn stat_secret(
+        &self,
+        collection_id: &str,
+        secret_id: &str
+    ) -> Result<Metadata> {
+        let secret_path = Path::new(PASS_SUBDIR)
+            .join(&*collection_id)
+            .join(&*secret_id);
+
+        Ok(self.pass.stat_file(secret_path).await?)
     }
 }
 
