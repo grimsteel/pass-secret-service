@@ -1,0 +1,23 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*.*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        name: Checkout
+      - uses: dtolnay/rust-toolchain@stable
+        name: Setup rust
+      - run: cargo build --release
+        name: Build
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/pass-secret-service
