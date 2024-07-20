@@ -2,17 +2,23 @@ use std::{collections::HashMap, sync::Arc};
 
 use zbus::{
     fdo, interface,
+    message::Header,
     object_server::SignalContext,
     zvariant::{Dict, ObjectPath, OwnedValue},
     Connection, ObjectServer,
 };
 
-use crate::{error::Result, secret_store::SecretStore};
+use crate::{
+    error::{Error, Result},
+    secret_store::SecretStore,
+};
 
 use super::{
     item::Item,
+    session::Session,
     utils::{
-        alias_path, collection_path, secret_alias_path, secret_path, time_to_int, try_interface, Secret, EMPTY_PATH
+        alias_path, collection_path, secret_alias_path, secret_path, time_to_int, try_interface,
+        Secret, EMPTY_PATH,
     },
 };
 
@@ -27,7 +33,7 @@ impl<'a> Collection<'a> {
         Item {
             id: Arc::new(id),
             collection_id: self.id.clone(),
-            store: self.store.clone()
+            store: self.store.clone(),
         }
     }
 }
@@ -99,8 +105,16 @@ impl Collection<'static> {
         secret: Secret,
         replace: bool,
         #[zbus(signal_context)] signal_context: SignalContext<'_>,
-        #[zbus(object_server)] object_server: &ObjectServer
+        #[zbus(object_server)] object_server: &ObjectServer,
+        #[zbus(header)] header: Header<'_>,
     ) -> Result<(ObjectPath, ObjectPath)> {
+        let secret_value =
+            try_interface(object_server.interface::<_, Session>(&secret.session).await)?
+                .ok_or(Error::InvalidSession)?
+                .get()
+                .await
+                .decrypt(secret, header)?;
+
         let label = dbg!(properties
             .get("org.freedesktop.Secret.Item.Label")
             .and_then(|l| l.downcast_ref::<String>().ok()));
@@ -111,9 +125,6 @@ impl Collection<'static> {
             .unwrap_or_default());
         let attrs = Arc::new(attrs);
 
-        // TODO: actual secret decoding w/ sessions
-        let secret_data = secret.value;
-
         let secret_id = if replace {
             // replace the secret with the matching attrs
             let matching_secret = self
@@ -122,24 +133,28 @@ impl Collection<'static> {
                 .await?;
             if let Some(secret_id) = matching_secret.into_iter().nth(0).map(Arc::new) {
                 // update the secret/label
-                self.store.set_secret(&*self.id, &*secret_id, secret_data).await?;
+                self.store
+                    .set_secret(&*self.id, &*secret_id, secret_value)
+                    .await?;
                 if let Some(label) = label {
-                    self.store.set_secret_label(self.id.clone(), secret_id.clone(), label).await?;
+                    self.store
+                        .set_secret_label(self.id.clone(), secret_id.clone(), label)
+                        .await?;
                 }
 
                 let path = secret_path(&*self.id, &*secret_id).unwrap();
                 Self::item_changed(&signal_context, path.clone()).await?;
-                
+
                 // no need to add to the object server
                 return Ok((path, EMPTY_PATH));
             } else {
                 self.store
-                    .create_secret(self.id.clone(), label, secret_data, attrs)
+                    .create_secret(self.id.clone(), label, secret_value, attrs)
                     .await?
             }
         } else {
             self.store
-                .create_secret(self.id.clone(), label, secret_data, attrs)
+                .create_secret(self.id.clone(), label, secret_value, attrs)
                 .await?
         };
 
@@ -147,14 +162,18 @@ impl Collection<'static> {
         let item = self.make_item(secret_id);
 
         // add to all aliases too
-        for alias in self.store.list_aliases_for_collection(self.id.clone()).await? {
+        for alias in self
+            .store
+            .list_aliases_for_collection(self.id.clone())
+            .await?
+        {
             if let Some(path) = secret_alias_path(&alias, &*item.id) {
                 object_server.at(&path, item.clone()).await?;
             }
         }
         // add the item to the object server
         object_server.at(&path, item).await?;
-        
+
         Self::item_created(&signal_context, path.clone()).await?;
 
         // no prompt needed for GPG encryption

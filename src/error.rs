@@ -19,6 +19,7 @@ pub enum Error {
     // pass is not initialized
     NotInitialized,
     InvalidSession,
+    PermissionDenied,
 }
 
 impl From<io::Error> for Error {
@@ -65,18 +66,15 @@ impl DBusError for Error {
             Error::GpgError(_) => "me.grimsteel.PassSecretService.GPGError",
             Error::NotInitialized => "me.grimsteel.PassSecretService.PassNotInitialized",
             Error::InvalidSession => "org.freedesktop.Secret.Error.NoSession",
+            Error::PermissionDenied => "org.freedesktop.DBus.Error.AccessDenied",
         })
     }
 
     fn description(&self) -> Option<&str> {
         match self {
-            Error::IoError(_) => None,
             Error::DbusError(zbus::Error::MethodError(_, desc, _)) => desc.as_deref(),
-            Error::DbusError(_) => None,
-            Error::RedbError(_) => None,
             Error::GpgError(e) => Some(e.as_str()),
-            Error::NotInitialized => None,
-            Error::InvalidSession => None,
+            _ => None,
         }
     }
 }
@@ -90,6 +88,7 @@ impl Display for Error {
             Error::RedbError(e) => write!(f, "ReDB Error: {e}"),
             Error::NotInitialized => write!(f, "Pass is not initialized"),
             Error::InvalidSession => write!(f, "Invalid secret service session"),
+            Error::PermissionDenied => write!(f, "Access denied"),
         }
     }
 }
@@ -99,6 +98,7 @@ impl From<Error> for fdo::Error {
         match value {
             Error::IoError(err) => Self::IOError(format!("{err}")),
             Error::DbusError(err) => Self::ZBus(err),
+            Error::PermissionDenied => Self::AccessDenied("Access denied".into()),
             err => Self::Failed(format!("{err}")),
         }
     }

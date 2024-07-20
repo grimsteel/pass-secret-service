@@ -2,7 +2,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use nanoid::nanoid;
 use zbus::{
-    fdo, interface, message::Header, object_server::SignalContext, zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value}, Connection, ObjectServer
+    fdo, interface,
+    message::Header,
+    object_server::SignalContext,
+    zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value},
+    Connection, ObjectServer,
 };
 
 use crate::{
@@ -12,9 +16,13 @@ use crate::{
 };
 
 use super::{
-    collection::Collection, item::Item, session::{Session, SessionAlgorithm}, utils::{
-        alias_path, collection_path, secret_alias_path, secret_path, session_path, try_interface, EMPTY_PATH
-    }
+    collection::Collection,
+    item::Item,
+    session::{Session, SessionAlgorithm},
+    utils::{
+        alias_path, collection_path, secret_alias_path, secret_path, session_path, try_interface,
+        EMPTY_PATH,
+    },
 };
 
 #[derive(Debug)]
@@ -45,7 +53,7 @@ impl Service<'static> {
                     .map(|id| Item {
                         store: store.clone(),
                         id: Arc::new(id),
-                        collection_id: collection_id.clone()
+                        collection_id: collection_id.clone(),
                     })
                     .collect();
 
@@ -94,27 +102,27 @@ impl Service<'static> {
     async fn open_session(
         &self,
         algorithm: String,
-        input: OwnedValue,
+        _input: OwnedValue,
         #[zbus(header)] header: Header<'_>,
-        #[zbus(object_server)] object_server: &ObjectServer
+        #[zbus(object_server)] object_server: &ObjectServer,
     ) -> fdo::Result<(Value, ObjectPath)> {
-        let client_name = header.sender().unwrap();
+        let client_name = header.sender().unwrap().to_owned().into();
         match &*algorithm {
             "plain" => {
                 let id = nanoid!(8, &NANOID_ALPHABET);
-                let path = session_path(&id).unwrap();
+                let path = session_path(id).unwrap();
                 let session = Session {
                     alg: SessionAlgorithm::Plain,
                     client_name,
-                    id
+                    path: path.clone().into(),
                 };
-                object_server.at(&path, session);
+                object_server.at(&path, session).await?;
                 Ok(("".into(), path))
-            },
-            // TODO: support other algs
-            _ => {
-                Err(fdo::Error::NotSupported("Algorithm is not supported".into()))
             }
+            // TODO: support other algs
+            _ => Err(fdo::Error::NotSupported(
+                "Algorithm is not supported".into(),
+            )),
         }
     }
 
@@ -249,7 +257,9 @@ impl Service<'static> {
                 // add secrets under this alias
                 for secret in self.store.list_secrets(&id).await? {
                     if let Some(path) = secret_alias_path(&*alias, &secret) {
-                        if let Some(item) = try_interface(object_server.interface::<_, Item>(&path).await)? {
+                        if let Some(item) =
+                            try_interface(object_server.interface::<_, Item>(&path).await)?
+                        {
                             object_server.at(&path, item.get().await.to_owned()).await?;
                         }
                     }
