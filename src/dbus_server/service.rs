@@ -203,9 +203,9 @@ impl Service<'static> {
         (vec![], EMPTY_PATH)
     }
 
-    async fn unlock(&self, _objects: Vec<OwnedObjectPath>) -> (Vec<ObjectPath>, ObjectPath) {
-        // we don't support locking
-        (vec![], EMPTY_PATH)
+    async fn unlock(&self, objects: Vec<OwnedObjectPath>) -> (Vec<OwnedObjectPath>, ObjectPath) {
+        // we don't support locking - just say all of them were unlocked
+        (objects, EMPTY_PATH)
     }
 
     async fn get_secrets(

@@ -92,7 +92,7 @@ impl Collection<'static> {
             .store
             .search_collection(self.id.clone(), Arc::new(attributes))
             .await?;
-        let paths = items.into_iter().filter_map(collection_path).collect();
+        let paths = items.into_iter().filter_map(|item| secret_path(&*self.id, &item)).collect();
 
         Ok(paths)
     }
