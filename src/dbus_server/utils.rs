@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Display};
+use std::{fmt::{Debug, Display}, time::SystemTime, io};
 
 use zbus::zvariant::{DeserializeDict, ObjectPath, OwnedObjectPath, SerializeDict, Type};
 
@@ -37,6 +37,15 @@ pub fn try_interface<T>(result: zbus::Result<T>) -> zbus::Result<Option<T>> {
         Err(zbus::Error::InterfaceNotFound) => Ok(None),
         Err(e) => Err(e),
     }
+}
+
+pub fn time_to_int(time: io::Result<SystemTime>) -> u64 {
+    time
+        .ok()
+        // return 0 for times before the epoch or for platforms where this isn't supported
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|t| t.as_secs())
+        .unwrap_or_default()
 }
 
 #[derive(DeserializeDict, SerializeDict, Type)]

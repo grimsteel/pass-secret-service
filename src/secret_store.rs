@@ -495,13 +495,13 @@ impl<'a> SecretStore<'a> {
     /// if can_prompt is true, a gpg prompt may show
     pub async fn read_secret(
         &self,
-        collection_id: Arc<String>,
-        secret_id: Arc<String>,
+        collection_id: &str,
+        secret_id: &str,
         can_prompt: bool,
     ) -> Result<Vec<u8>> {
         let secret_path = Path::new(PASS_SUBDIR)
-            .join(&*collection_id)
-            .join(&*secret_id);
+            .join(collection_id)
+            .join(secret_id);
 
         Ok(self.pass.read_password(secret_path, can_prompt).await?)
     }

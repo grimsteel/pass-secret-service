@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::SystemTime};
+use std::{collections::HashMap, sync::Arc};
 
 use zbus::{
     fdo, interface,
@@ -12,8 +12,7 @@ use crate::{error::Result, secret_store::SecretStore};
 use super::{
     item::Item,
     utils::{
-        alias_path, collection_path, secret_alias_path, secret_path, try_interface, Secret,
-        EMPTY_PATH,
+        alias_path, collection_path, secret_alias_path, secret_path, time_to_int, try_interface, Secret, EMPTY_PATH
     },
 };
 
@@ -194,29 +193,15 @@ impl Collection<'static> {
     #[zbus(property)]
     async fn created(&self) -> fdo::Result<u64> {
         let metadata = self.store.stat_collection(&self.id).await?;
-        let created = metadata
-            .created()
-            .ok()
-            // return 0 for times before the epoch or for platforms where this isn't supported
-            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-            .map(|t| t.as_secs())
-            .unwrap_or_default();
 
-        Ok(created)
+        Ok(time_to_int(metadata.created()))
     }
 
     #[zbus(property)]
     async fn modified(&self) -> fdo::Result<u64> {
         let metadata = self.store.stat_collection(&self.id).await?;
-        let modified = metadata
-            .modified()
-            .ok()
-            // return 0 for times before the epoch or for platforms where this isn't supported
-            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-            .map(|t| t.as_secs())
-            .unwrap_or_default();
 
-        Ok(modified)
+        Ok(time_to_int(metadata.modified()))
     }
 
     #[zbus(signal)]
