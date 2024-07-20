@@ -128,16 +128,19 @@ impl<T> OptionNoneNotFound<T> for Option<T> {
     }
 }
 
-macro_rules! ignore_nonexistent_table {
+macro_rules! raise_nonexistent_table {
     ($expression:expr) => {
+        raise_nonexistent_table!($expression, Err(io::Error::from(io::ErrorKind::NotFound).into()))
+    };
+    ($expression:expr, $default:expr) => {
         match $expression {
             Ok(t) => t,
             // table does not exist yet - that's ok
             Err(redb::TableError::TableDoesNotExist(_)) => {
-                return Err(io::Error::from(io::ErrorKind::NotFound).into())
+                return $default;
             }
             Err(e) => return Err(e).into_result(),
         }
     };
 }
-pub(crate) use ignore_nonexistent_table;
+pub(crate) use raise_nonexistent_table;

@@ -1,6 +1,7 @@
 use std::{fmt::Display, io, time::SystemTime};
 
-use zbus::zvariant::{DeserializeDict, ObjectPath, OwnedObjectPath, SerializeDict, Type};
+use serde::{Deserialize, Serialize};
+use zbus::zvariant::{ObjectPath, OwnedObjectPath, Type};
 
 pub const EMPTY_PATH: ObjectPath = ObjectPath::from_static_str_unchecked("/");
 
@@ -44,11 +45,10 @@ pub fn time_to_int(time: io::Result<SystemTime>) -> u64 {
         .unwrap_or_default()
 }
 
-#[derive(DeserializeDict, SerializeDict, Type)]
-#[zvariant(signature = "dict")]
+#[derive(Type, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Secret {
     pub session: OwnedObjectPath,
-    pub parameters: Option<Vec<u8>>,
+    pub parameters: Vec<u8>,
     pub value: Vec<u8>,
-    pub content_type: Option<String>,
+    pub content_type: String,
 }

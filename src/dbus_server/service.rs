@@ -2,15 +2,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use nanoid::nanoid;
 use zbus::{
-    fdo, interface,
-    message::Header,
-    object_server::SignalContext,
-    zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value},
-    Connection, ObjectServer,
+    fdo, interface, message::Header, object_server::SignalContext, zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value}, Connection, ObjectServer
 };
 
 use crate::{
-    error::Result,
+    error::{Error, OptionNoneNotFound, Result},
     pass::PasswordStore,
     secret_store::{slugify, SecretStore, NANOID_ALPHABET},
 };
@@ -20,14 +16,13 @@ use super::{
     item::Item,
     session::{Session, SessionAlgorithm},
     utils::{
-        alias_path, collection_path, secret_alias_path, secret_path, session_path, try_interface,
-        EMPTY_PATH,
+        alias_path, collection_path, secret_alias_path, secret_path, session_path, try_interface, Secret, EMPTY_PATH
     },
 };
 
 #[derive(Debug)]
 pub struct Service<'a> {
-    store: SecretStore<'a>,
+    store: SecretStore<'a>
 }
 
 impl Service<'static> {
@@ -37,8 +32,7 @@ impl Service<'static> {
         {
             let object_server = connection.object_server();
 
-            let mut aliases = store.list_all_aliases().await
-                .unwrap_or_else(|_| HashMap::new());
+            let mut aliases = store.list_all_aliases().await?;
 
             // initialize the default store if necessary
             if !aliases.contains_key("default") {
@@ -95,7 +89,9 @@ impl Service<'static> {
             }
         }
 
-        Ok(Service { store })
+        Ok(Service {
+            store
+        })
     }
 
     fn make_collection(&self, name: String) -> Collection<'static> {
@@ -114,17 +110,19 @@ impl Service<'static> {
         _input: OwnedValue,
         #[zbus(header)] header: Header<'_>,
         #[zbus(object_server)] object_server: &ObjectServer,
+        #[zbus(connection)] connection: &Connection
     ) -> fdo::Result<(Value, ObjectPath)> {
         let client_name = header.sender().unwrap().to_owned().into();
         match &*algorithm {
             "plain" => {
                 let id = nanoid!(8, &NANOID_ALPHABET);
                 let path = session_path(id).unwrap();
-                let session = Session {
-                    alg: SessionAlgorithm::Plain,
+                let session = Session::new(
+                    SessionAlgorithm::Plain,
                     client_name,
-                    path: path.clone().into(),
-                };
+                    path.clone().into(),
+                    connection.clone()
+                );
                 object_server.at(&path, session).await?;
                 Ok(("".into(), path))
             }
@@ -208,6 +206,29 @@ impl Service<'static> {
     async fn unlock(&self, _objects: Vec<OwnedObjectPath>) -> (Vec<ObjectPath>, ObjectPath) {
         // we don't support locking
         (vec![], EMPTY_PATH)
+    }
+
+    async fn get_secrets(
+        &self,
+        items: Vec<ObjectPath<'_>>,
+        session: ObjectPath<'_>,
+        #[zbus(object_server)] object_server: &ObjectServer,
+        #[zbus(header)] header: Header<'_>
+    ) -> Result<HashMap<OwnedObjectPath, Secret>> {
+        let session_ref = try_interface(object_server.interface::<_, Session>(&session).await)?
+            .ok_or(Error::InvalidSession)?;
+        let session = session_ref.get().await;
+
+        let mut results = HashMap::with_capacity(items.len());
+
+        for item_path in items {
+            let item_ref = try_interface(object_server.interface::<_, Item>(&item_path).await)?
+                .into_not_found()?;
+            let secret = item_ref.get().await.read_with_session(&header, &session).await?;
+            results.insert(item_path.into(), secret);
+        }
+
+        Ok(results)
     }
 
     async fn read_alias(&self, name: String) -> Result<ObjectPath> {

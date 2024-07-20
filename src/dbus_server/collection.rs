@@ -4,7 +4,7 @@ use zbus::{
     fdo, interface,
     message::Header,
     object_server::SignalContext,
-    zvariant::{Dict, ObjectPath, OwnedValue},
+    zvariant::{Dict, ObjectPath, Value},
     Connection, ObjectServer,
 };
 
@@ -14,12 +14,10 @@ use crate::{
 };
 
 use super::{
-    item::Item,
-    session::Session,
-    utils::{
+    item::Item, session::Session, utils::{
         alias_path, collection_path, secret_alias_path, secret_path, time_to_int, try_interface,
         Secret, EMPTY_PATH,
-    },
+    }
 };
 
 #[derive(Clone, Debug)]
@@ -101,7 +99,7 @@ impl Collection<'static> {
 
     async fn create_item(
         &self,
-        properties: HashMap<String, OwnedValue>,
+        properties: HashMap<String, Value<'_>>,
         secret: Secret,
         replace: bool,
         #[zbus(signal_context)] signal_context: SignalContext<'_>,
@@ -113,16 +111,16 @@ impl Collection<'static> {
                 .ok_or(Error::InvalidSession)?
                 .get()
                 .await
-                .decrypt(secret, header)?;
+                .decrypt(secret, &header)?;
 
-        let label = dbg!(properties
+        let label = properties
             .get("org.freedesktop.Secret.Item.Label")
-            .and_then(|l| l.downcast_ref::<String>().ok()));
-        let attrs = dbg!(properties
+            .and_then(|l| l.downcast_ref::<String>().ok());
+        let attrs = properties
             .get("org.freedesktop.Secret.Item.Attributes")
             .and_then(|a| a.downcast_ref::<Dict>().ok())
             .and_then(|a| HashMap::<String, String>::try_from(a).ok())
-            .unwrap_or_default());
+            .unwrap_or_default();
         let attrs = Arc::new(attrs);
 
         let secret_id = if replace {

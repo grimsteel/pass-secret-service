@@ -79,7 +79,10 @@ impl PasswordStore {
             command.args(opts.split_ascii_whitespace());
         }
 
-        command.stdin(Stdio::piped()).stdout(Stdio::piped());
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
         command
     }
@@ -105,7 +108,7 @@ impl PasswordStore {
 
         let output = process.wait_with_output().await?;
         if output.status.success() {
-            // gpg decrypted successfulyl
+            // gpg decrypted successfully
             Ok(output.stdout)
         } else {
             Err(Error::GpgError(

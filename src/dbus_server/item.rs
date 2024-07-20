@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use zbus::{fdo, interface, message::Header, zvariant::ObjectPath, Connection, ObjectServer};
+use zbus::{fdo, interface, message::Header, object_server::InterfaceDeref, zvariant::ObjectPath, Connection, ObjectServer};
 
 use crate::{
     error::{Error, Result},
@@ -38,6 +38,17 @@ impl<'a> Item<'a> {
             )
             .await?;
         Ok(())
+    }
+}
+
+impl<'a> Item<'a> {
+    pub async fn read_with_session(&self, header: &Header<'_>, session: &InterfaceDeref<'_, Session>) -> Result<Secret> {
+        let secret_value = self
+            .store
+            .read_secret(&*self.collection_id, &*self.id, true)
+            .await?;
+
+        session.encrypt(secret_value, header)
     }
 }
 
@@ -79,21 +90,14 @@ impl Item<'static> {
         session: ObjectPath<'_>,
         #[zbus(header)] header: Header<'_>,
         #[zbus(object_server)] object_server: &ObjectServer,
-    ) -> Result<Secret> {
-        // TODO: actually encrypt w/ session
-
-        let secret_value = self
-            .store
-            .read_secret(&*self.collection_id, &*self.id, true)
-            .await?;
-
-        let secret_data = try_interface(object_server.interface::<_, Session>(&session).await)?
-            .ok_or(Error::InvalidSession)?
-            .get()
-            .await
-            .encrypt(secret_value, header)?;
-
-        Ok(secret_data)
+    ) -> Result<(Secret, )> {
+        Ok((self.read_with_session(
+            &header,
+            &try_interface(object_server.interface::<_, Session>(&session).await)?
+                .ok_or(Error::InvalidSession)?
+                .get()
+                .await
+        ).await?, ))
     }
 
     async fn set_secret(
@@ -108,7 +112,7 @@ impl Item<'static> {
                 .ok_or(Error::InvalidSession)?
                 .get()
                 .await
-                .decrypt(secret, header)?;
+                .decrypt(secret, &header)?;
 
         self.store
             .set_secret(&*self.collection_id, &*self.id, secret_value)
@@ -122,7 +126,7 @@ impl Item<'static> {
 
     #[zbus(property)]
     async fn locked(&self) -> bool {
-        true
+        false
     }
 
     #[zbus(property)]

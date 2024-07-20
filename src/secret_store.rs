@@ -7,7 +7,7 @@ use redb::{
 use tokio::{sync::RwLock, task::spawn_blocking};
 
 use crate::{
-    error::{ignore_nonexistent_table, IntoResult, OptionNoneNotFound, Result},
+    error::{raise_nonexistent_table, IntoResult, OptionNoneNotFound, Result},
     pass::PasswordStore,
     redb_imps::RedbHashMap,
 };
@@ -79,8 +79,8 @@ pub fn search_collection(attrs: &HashMap<String, String>, db: &Database) -> Resu
     };
 
     let tx = db.begin_read().into_result()?;
-    let attributes = ignore_nonexistent_table!(tx.open_multimap_table(ATTRIBUTES_TABLE));
-    let attributes_reverse = ignore_nonexistent_table!(tx.open_table(ATTRIBUTES_TABLE_REVERSE));
+    let attributes = raise_nonexistent_table!(tx.open_multimap_table(ATTRIBUTES_TABLE), Ok(vec![]));
+    let attributes_reverse = raise_nonexistent_table!(tx.open_table(ATTRIBUTES_TABLE_REVERSE), Ok(vec![]));
 
     let mut attr_iter = attrs.into_iter();
 
@@ -161,7 +161,7 @@ impl<'a> SecretStore<'a> {
         let db = self.db.clone();
         spawn_blocking(move || {
             let tx = db.begin_read().into_result()?;
-            let table = ignore_nonexistent_table!(tx.open_table(LABELS_TABLE));
+            let table = raise_nonexistent_table!(tx.open_table(LABELS_TABLE));
             let label = table
                 .get(collection_id.as_str())
                 .into_result()?
@@ -193,7 +193,7 @@ impl<'a> SecretStore<'a> {
         Ok(spawn_blocking(move || -> Result<_> {
             // open the aliases table
             let tx = db.begin_read().into_result()?;
-            let table = ignore_nonexistent_table!(tx.open_multimap_table(ALIASES_TABLE_REVERSE));
+            let table = raise_nonexistent_table!(tx.open_multimap_table(ALIASES_TABLE_REVERSE), Ok(HashMap::new()));
             Ok(table
                 .iter()
                 .into_result()?
@@ -220,7 +220,7 @@ impl<'a> SecretStore<'a> {
             let tx = db.begin_read().into_result()?;
             
             let aliases_reverse =
-                ignore_nonexistent_table!(tx.open_multimap_table(ALIASES_TABLE_REVERSE));
+                raise_nonexistent_table!(tx.open_multimap_table(ALIASES_TABLE_REVERSE));
 
             // get the aliases for this collection and stringify each one
             Ok(aliases_reverse
@@ -238,7 +238,7 @@ impl<'a> SecretStore<'a> {
         spawn_blocking(move || {
             // open the aliases table
             let tx = db.begin_read().into_result()?;
-            let table = ignore_nonexistent_table!(tx.open_table(ALIASES_TABLE));
+            let table = raise_nonexistent_table!(tx.open_table(ALIASES_TABLE));
             let target = table
                 .get(alias.as_str())
                 .into_result()?
@@ -470,8 +470,10 @@ impl<'a> SecretStore<'a> {
             .list_items(collection_path)
             .await?
             .into_iter()
-            .filter_map(|(file_type, name)| {
+            .filter_map(|(file_type, mut name)| {
                 if file_type.is_file() && name.ends_with(".gpg") {
+                    // remove the ".gpg"
+                    name.truncate(name.len() - 4);
                     Some(name)
                 } else {
                     None
@@ -506,7 +508,7 @@ impl<'a> SecretStore<'a> {
             let db = cols.get(&*collection_id).into_not_found()?;
             let tx = db.begin_read().into_result()?;
             let attributes_table_reverse =
-                ignore_nonexistent_table!(tx.open_table(ATTRIBUTES_TABLE_REVERSE));
+                raise_nonexistent_table!(tx.open_table(ATTRIBUTES_TABLE_REVERSE));
 
             let secret_id = secret_id.as_str();
 
@@ -576,7 +578,7 @@ impl<'a> SecretStore<'a> {
     pub async fn stat_secret(&self, collection_id: &str, secret_id: &str) -> Result<Metadata> {
         let secret_path = Path::new(PASS_SUBDIR)
             .join(&*collection_id)
-            .join(&*secret_id);
+            .join(&format!("{secret_id}.gpg"));
 
         Ok(self.pass.stat_file(secret_path).await?)
     }
@@ -700,7 +702,7 @@ impl<'a> SecretStore<'a> {
             let db = cols.get(&*collection_id).into_not_found()?;
 
             let tx = db.begin_read().into_result()?;
-            let labels_table = ignore_nonexistent_table!(tx.open_table(LABELS_TABLE));
+            let labels_table = raise_nonexistent_table!(tx.open_table(LABELS_TABLE));
 
             let label = labels_table
                 .get(secret_id.as_str())
