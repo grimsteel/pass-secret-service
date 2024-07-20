@@ -1,24 +1,20 @@
 use std::{collections::HashMap, sync::Arc};
 
+use nanoid::nanoid;
 use zbus::{
-    interface,
-    object_server::SignalContext,
-    zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value},
-    Connection, ObjectServer,
+    fdo, interface, message::Header, object_server::SignalContext, zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value}, Connection, ObjectServer
 };
 
 use crate::{
     error::Result,
     pass::PasswordStore,
-    secret_store::{slugify, SecretStore},
+    secret_store::{slugify, SecretStore, NANOID_ALPHABET},
 };
 
 use super::{
-    collection::Collection,
-    item::Item,
-    utils::{
-        alias_path, collection_path, secret_alias_path, secret_path, try_interface, EMPTY_PATH,
-    },
+    collection::Collection, item::Item, session::{Session, SessionAlgorithm}, utils::{
+        alias_path, collection_path, secret_alias_path, secret_path, session_path, try_interface, EMPTY_PATH
+    }
 };
 
 #[derive(Debug)]
@@ -95,8 +91,31 @@ impl Service<'static> {
 
 #[interface(name = "org.freedesktop.Secret.Service")]
 impl Service<'static> {
-    async fn open_session(&self, algorithm: String, input: OwnedValue) -> (Value, ObjectPath) {
-        ("".into(), EMPTY_PATH)
+    async fn open_session(
+        &self,
+        algorithm: String,
+        input: OwnedValue,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(object_server)] object_server: &ObjectServer
+    ) -> fdo::Result<(Value, ObjectPath)> {
+        let client_name = header.sender().unwrap();
+        match &*algorithm {
+            "plain" => {
+                let id = nanoid!(8, &NANOID_ALPHABET);
+                let path = session_path(&id).unwrap();
+                let session = Session {
+                    alg: SessionAlgorithm::Plain,
+                    client_name,
+                    id
+                };
+                object_server.at(&path, session);
+                Ok(("".into(), path))
+            },
+            // TODO: support other algs
+            _ => {
+                Err(fdo::Error::NotSupported("Algorithm is not supported".into()))
+            }
+        }
     }
 
     async fn create_collection(

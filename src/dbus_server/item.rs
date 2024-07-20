@@ -13,6 +13,24 @@ pub struct Item<'a> {
     pub store: SecretStore<'a>
 }
 
+impl<'a> Item<'a> {
+    fn path(&self) -> ObjectPath {
+        secret_path(&*self.collection_id, &*self.id).unwrap()
+    }
+    
+    async fn broadcast_collection_signal(&self, connection: &Connection, name: &str) -> Result {
+        connection
+            .emit_signal(
+                Option::<String>::None,
+                collection_path(&*self.collection_id).unwrap(),
+                "org.freedesktop.Secret.Collection",
+                name,
+                &(self.path(), ),
+            ).await?;
+        Ok(())
+    }
+}
+
 #[interface(name = "org.freedesktop.Secret.Item")]
 impl Item<'static> {
     async fn delete(
@@ -23,20 +41,10 @@ impl Item<'static> {
         // delete from the stoer
         self.store.delete_secret(self.collection_id.clone(), self.id.clone()).await?;
 
-        let path = secret_path(&*self.collection_id, &*self.id).unwrap();
-
-        // signal on the collection
-        connection
-            .emit_signal(
-                Option::<String>::None,
-                collection_path(&*self.collection_id).unwrap(),
-                "org.freedesktop.Secret.Collection",
-                "ItemDeleted",
-                &(path.clone(), ),
-            ).await?;
+        self.broadcast_collection_signal(connection, "ItemDeleted").await?;
 
         // delete the objects off of dbus
-        try_interface(object_server.remove::<Self, _>(path).await)?;
+        try_interface(object_server.remove::<Self, _>(self.path()).await)?;
 
         for alias in self.store.list_aliases_for_collection(self.collection_id.clone()).await? {
             // delete from each alias
@@ -67,10 +75,13 @@ impl Item<'static> {
 
     async fn set_secret(
         &self,
-        secret: Secret
+        secret: Secret,
+        //#[zbus(connection)] connection: &Connection
     ) -> Result<()> {
         // TODO: actually decrypt w/ session
         self.store.set_secret(&*self.collection_id, &*self.id, secret.value).await?;
+
+        //self.broadcast_collection_signal(connection, "ItemChanged");
         
         Ok(())
     }
@@ -85,8 +96,15 @@ impl Item<'static> {
     }
 
     #[zbus(property)]
-    async fn set_attributes(&mut self, attributes: HashMap<String, String>) -> fdo::Result<()> {
+    async fn set_attributes(
+        &mut self,
+        attributes: HashMap<String, String>,
+        //#[zbus(connection)] connection: &Connection
+    ) -> fdo::Result<()> {
         self.store.set_secret_attrs(self.collection_id.clone(), self.id.clone(), attributes).await?;
+        
+        //self.broadcast_collection_signal(connection, "ItemChanged");
+        
         Ok(())
     }
 
@@ -96,8 +114,16 @@ impl Item<'static> {
     }
 
     #[zbus(property)]
-    async fn set_label(&mut self, label: String) -> fdo::Result<()> {
-        Ok(self.store.set_secret_label(self.collection_id.clone(), self.id.clone(), label).await?)
+    async fn set_label(
+        &mut self,
+        label: String,
+        //#[zbus(connection)] connection: &Connection
+    ) -> fdo::Result<()> {
+        self.store.set_secret_label(self.collection_id.clone(), self.id.clone(), label).await?;
+
+        //self.broadcast_collection_signal(connection, "ItemChanged");
+
+        Ok(())
     }
 
     #[zbus(property)]

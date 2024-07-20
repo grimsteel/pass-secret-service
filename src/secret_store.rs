@@ -31,7 +31,7 @@ const ALIASES_TABLE_REVERSE: MultimapTableDefinition<&str, &str> =
 const PASS_SUBDIR: &'static str = "secret-service";
 const ATTRIBUTES_DB: &'static str = "attributes.redb";
 
-const NANOID_ALPHABET: [char; 63] = [
+pub const NANOID_ALPHABET: [char; 63] = [
     'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's',
     't', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L',
     'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '0', '1', '2', '3', '4',
