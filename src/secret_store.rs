@@ -631,14 +631,7 @@ impl<'a> SecretStore<'a> {
             let label = label
                 .map(Cow::Owned)
                 .unwrap_or_else(|| "Untitled Secret".into());
-            labels_table.insert(value, label.as_ref());
-
-            /*// remove existing attributes for this secret
-            if let Some(existing_attrs) = attributes_table_reverse.get(value).into_result()? {
-                for (k, v) in existing_attrs.value() {
-                    attributes_table.remove((k, v), value).into_result()?;
-                }
-            }*/
+            labels_table.insert(value, label.as_ref()).into_result()?;
 
             let attributes_ref = attributes
                 .iter()
@@ -661,6 +654,120 @@ impl<'a> SecretStore<'a> {
             tx.commit().into_result()?;
 
             Ok(secret_id)
+        })
+        .await
+        .unwrap()
+    }
+
+    pub async fn set_secret(
+        &self,
+        collection_id: &str,
+        secret_id: &str,
+        value: Vec<u8>
+    ) -> Result {
+        let collection_dir = Path::new(PASS_SUBDIR).join(&*collection_id);
+
+        let secret_path = collection_dir.join(&*secret_id);
+
+        // write the password
+        self.pass.write_password(secret_path, value).await?;
+
+        Ok(())
+    }
+
+    pub async fn set_secret_label(
+        &self,
+        collection_id: Arc<String>,
+        secret_id: Arc<String>,
+        label: String
+    ) -> Result {
+        // write the attributes
+        let collections = self.collection_dbs.clone();
+        spawn_blocking(move || {
+            let cols = collections.blocking_read();
+
+            // get the db or return an error
+            let db = cols.get(&*collection_id).into_not_found()?;
+
+            let tx = db.begin_write().into_result()?;
+            let mut labels_table = tx.open_table(LABELS_TABLE).into_result()?;
+
+            labels_table.insert(secret_id.as_str(), label.as_str()).into_result()?;
+
+            drop(labels_table);
+            tx.commit().into_result()?;
+
+            Ok(())
+        })
+        .await
+        .unwrap()
+    }
+
+    pub async fn get_secret_label(
+        &self,
+        collection_id: Arc<String>,
+        secret_id: Arc<String>,
+    ) -> Result<String> {
+        let collections = self.collection_dbs.clone();
+        spawn_blocking(move || {
+            let cols = collections.blocking_read();
+
+            // get the db or return an error
+            let db = cols.get(&*collection_id).into_not_found()?;
+
+            let tx = db.begin_read().into_result()?;
+            let labels_table = ignore_nonexistent_table!(tx.open_table(LABELS_TABLE));
+
+            let label = labels_table
+                .get(secret_id.as_str())
+                .into_result()?
+                .into_not_found()?
+            .value().to_owned();
+
+            Ok(label)
+        })
+            .await
+            .unwrap()
+    }
+
+    /// read the attributes for the given secret
+    pub async fn set_secret_attrs(
+        &self,
+        collection_id: Arc<String>,
+        secret_id: Arc<String>,
+        attrs: HashMap<String, String>
+    ) -> Result {
+        let collections = self.collection_dbs.clone();
+        spawn_blocking(move || {
+            let cols = collections.blocking_read();
+            let db = cols.get(&*collection_id).into_not_found()?;
+            let tx = db.begin_write().into_result()?;
+            let mut attributes_table = tx.open_multimap_table(ATTRIBUTES_TABLE).into_result()?;
+            let mut attributes_table_reverse = tx.open_table(ATTRIBUTES_TABLE_REVERSE).into_result()?;
+
+            let attrs_ref = attrs
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect::<HashMap<_, _>>();
+
+            if let Some(old_attrs) = attributes_table_reverse.insert(secret_id.as_str(), attrs_ref).into_result()? {
+                // remove the old attributes
+                for (k, v) in old_attrs.value() {
+                    attributes_table.remove((k, v), secret_id.as_str()).into_result()?;
+                }
+            }
+
+            // insert the new attributes
+            for (k, v) in &attrs {
+                attributes_table.insert((k.as_str(), v.as_str()), secret_id.as_str()).into_result()?;
+            }
+
+            drop(attributes_table);
+            drop(attributes_table_reverse);
+
+            tx.commit().into_result()?;
+
+            Ok(())
         })
         .await
         .unwrap()

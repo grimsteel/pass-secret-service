@@ -40,23 +40,29 @@ impl Service<'static> {
                 let collection_aliases = aliases.remove(&collection).into_iter().flatten();
                 let path = collection_path(&collection).unwrap();
 
+                let collection_id = Arc::new(collection);
+
                 let secrets: Vec<_> = store
-                    .list_secrets(&collection)
+                    .list_secrets(&*collection_id)
                     .await?
                     .into_iter()
-                    .map(|id| (id, Item))
+                    .map(|id| Item {
+                        store: store.clone(),
+                        id: Arc::new(id),
+                        collection_id: collection_id.clone()
+                    })
                     .collect();
 
                 // add the collection secrets
                 for secret in &secrets {
-                    if let Some(path) = secret_path(&collection, &secret.0) {
-                        object_server.at(path, secret.1.clone()).await?;
+                    if let Some(path) = secret_path(&*collection_id, &*secret.id) {
+                        object_server.at(path, secret.clone()).await?;
                     }
                 }
 
                 let c = Collection {
                     store: store.clone(),
-                    id: Arc::new(collection),
+                    id: collection_id,
                 };
 
                 // add the aliases
@@ -66,8 +72,8 @@ impl Service<'static> {
                     }
                     // add the secrets under the alias
                     for secret in &secrets {
-                        if let Some(path) = secret_alias_path(&alias, &secret.0) {
-                            object_server.at(path, secret.1.clone()).await?;
+                        if let Some(path) = secret_alias_path(&alias, &*secret.id) {
+                            object_server.at(path, secret.clone()).await?;
                         }
                     }
                 }
@@ -193,6 +199,7 @@ impl Service<'static> {
         // remove the alias at this point
         try_interface(object_server.remove::<Collection, _>(&alias_path).await)?;
 
+        // remove all secrets under this alias
         if let Ok(old_target) = self.store.get_alias(alias.clone()).await {
             let secrets = self.store.list_secrets(&old_target).await?;
 
@@ -202,8 +209,6 @@ impl Service<'static> {
                 }
             }
         }
-
-        // TODO: Remove items
 
         let target_collection_id = if collection == EMPTY_PATH {
             None
@@ -216,12 +221,23 @@ impl Service<'static> {
                 .to_owned();
             object_server.at(&alias_path, collection_interface).await?;
 
-            // TODO: add items
-
             // get just the ID
-            collection
+            let collection_id = collection
                 .strip_prefix("/org/freedesktop/secrets/collection/")
-                .map(|s| s.to_string())
+                .map(|s| s.to_string());
+
+            if let Some(id) = &collection_id {
+                // add secrets under this alias
+                for secret in self.store.list_secrets(&id).await? {
+                    if let Some(path) = secret_alias_path(&*alias, &secret) {
+                        if let Some(item) = try_interface(object_server.interface::<_, Item>(&path).await)? {
+                            object_server.at(&path, item.get().await.to_owned()).await?;
+                        }
+                    }
+                }
+            }
+
+            collection_id
         };
         // save this persistently
         self.store.set_alias(alias, target_collection_id).await?;

@@ -11,7 +11,6 @@ use crate::{error::Result, secret_store::SecretStore};
 
 use super::{
     item::Item,
-    prompt::Prompt,
     utils::{
         alias_path, collection_path, secret_alias_path, secret_path, try_interface, Secret,
         EMPTY_PATH,
@@ -22,6 +21,16 @@ use super::{
 pub struct Collection<'a> {
     pub store: SecretStore<'a>,
     pub id: Arc<String>,
+}
+
+impl<'a> Collection<'a> {
+    fn make_item(&self, id: String) -> Item<'a> {
+        Item {
+            id: Arc::new(id),
+            collection_id: self.id.clone(),
+            store: self.store.clone()
+        }
+    }
 }
 
 #[interface(name = "org.freedesktop.Secret.Collection")]
@@ -90,6 +99,8 @@ impl Collection<'static> {
         properties: HashMap<String, OwnedValue>,
         secret: Secret,
         replace: bool,
+        #[zbus(signal_context)] signal_context: SignalContext<'_>,
+        #[zbus(object_server)] object_server: &ObjectServer
     ) -> Result<(ObjectPath, ObjectPath)> {
         let label = dbg!(properties
             .get("org.freedesktop.Secret.Item.Label")
@@ -110,10 +121,18 @@ impl Collection<'static> {
                 .store
                 .search_collection(self.id.clone(), attrs.clone())
                 .await?;
-            if let Some(secret_id) = matching_secret.into_iter().nth(0) {
-                // TODO: update label and secret
+            if let Some(secret_id) = matching_secret.into_iter().nth(0).map(Arc::new) {
+                // update the secret/label
+                self.store.set_secret(&*self.id, &*secret_id, secret_data).await?;
+                if let Some(label) = label {
+                    self.store.set_secret_label(self.id.clone(), secret_id.clone(), label).await?;
+                }
 
-                secret_id
+                let path = secret_path(&*self.id, &*secret_id).unwrap();
+                Self::item_changed(&signal_context, path.clone()).await?;
+                
+                // no need to add to the object server
+                return Ok((path, EMPTY_PATH));
             } else {
                 self.store
                     .create_secret(self.id.clone(), label, secret_data, attrs)
@@ -126,6 +145,18 @@ impl Collection<'static> {
         };
 
         let path = secret_path(&*self.id, &secret_id).unwrap();
+        let item = self.make_item(secret_id);
+
+        // add to all aliases too
+        for alias in self.store.list_aliases_for_collection(self.id.clone()).await? {
+            if let Some(path) = secret_alias_path(&alias, &*item.id) {
+                object_server.at(&path, item.clone()).await?;
+            }
+        }
+        // add the item to the object server
+        object_server.at(&path, item).await?;
+        
+        Self::item_created(&signal_context, path.clone()).await?;
 
         // no prompt needed for GPG encryption
         Ok((path, EMPTY_PATH))
