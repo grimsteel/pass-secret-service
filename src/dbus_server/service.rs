@@ -37,7 +37,16 @@ impl Service<'static> {
         {
             let object_server = connection.object_server();
 
-            let mut aliases = store.list_all_aliases().await?;
+            let mut aliases = store.list_all_aliases().await
+                .unwrap_or_else(|_| HashMap::new());
+
+            // initialize the default store if necessary
+            if !aliases.contains_key("default") {
+                let id = store
+                    .create_collection(Some("Default".into()), Some("default".into()))
+                    .await?;
+                aliases.insert(id, vec!["default".into()]);
+            }
 
             // add existing collections
             for collection in store.collections().await {

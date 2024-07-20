@@ -128,8 +128,6 @@ impl<'a> SecretStore<'a> {
     pub async fn new(pass: &'a PasswordStore) -> Result<Self> {
         let collections = Self::get_current_collections(pass).await?;
 
-        let has_default_collection = collections.contains_key("default");
-
         let db = open_db(&pass, &format!("{PASS_SUBDIR}/collections.redb")).await?;
 
         let store = Self {
@@ -137,13 +135,6 @@ impl<'a> SecretStore<'a> {
             collection_dbs: Arc::new(RwLock::new(collections)),
             db: Arc::new(db),
         };
-
-        // initialize the default store if necessary
-        if !has_default_collection {
-            store
-                .create_collection(Some("Default".into()), Some("default".into()))
-                .await?;
-        }
 
         Ok(store)
     }
@@ -224,12 +215,10 @@ impl<'a> SecretStore<'a> {
         &self,
         collection_id: Arc<String>,
     ) -> Result<Vec<String>> {
-        let collections = self.collection_dbs.clone();
+        let db = self.db.clone();
         spawn_blocking(move || -> Result<_> {
-            let cols = collections.blocking_read();
-            let db = cols.get(&*collection_id).into_not_found()?;
             let tx = db.begin_read().into_result()?;
-
+            
             let aliases_reverse =
                 ignore_nonexistent_table!(tx.open_multimap_table(ALIASES_TABLE_REVERSE));
 
