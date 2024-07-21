@@ -11,3 +11,8 @@ redb = "2.1.1"
 serde = "1.0.204"
 tokio = { version = "1.38.1", features = ["fs", "rt", "rt-multi-thread", "macros", "process"] }
 zbus = { version = "4.3.1", default-features = false, features = ["tokio"] }
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
