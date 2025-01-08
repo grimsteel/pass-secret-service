@@ -121,7 +121,7 @@ impl PasswordStore {
         for component in dir.as_ref().ancestors() {
             let gpg_id_path = component.join(".gpg-id");
             match read_to_string(gpg_id_path).await {
-                Ok(value) => return Ok(value),
+                Ok(value) => return Ok(value.trim().into()),
                 // not found, continue
                 Err(ref e) if e.kind() == io::ErrorKind::NotFound => {}
                 Err(e) => Err(e)?,
