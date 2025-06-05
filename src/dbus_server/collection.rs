@@ -203,7 +203,7 @@ impl Collection<'static> {
 
     #[zbus(property)]
     async fn locked(&self) -> bool {
-        // we don't support locking
+        // the collection does not need to be unlocked for it to be used. gpg will prompt automatically
         false
     }
 

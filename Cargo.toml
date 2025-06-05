@@ -4,6 +4,7 @@ version = "0.2.1"
 edition = "2021"
 
 [dependencies]
+argh = "0.1.13"
 futures-util = "0.3.30"
 libc = "0.2.155"
 nanoid = "0.4.0"

@@ -22,11 +22,12 @@ use super::{
 
 #[derive(Debug)]
 pub struct Service<'a> {
-    store: SecretStore<'a>
+    store: SecretStore<'a>,
+    forget_password_on_lock: bool
 }
 
 impl Service<'static> {
-    pub async fn init(connection: Connection, pass: &'static PasswordStore) -> Result<Self> {
+    pub async fn init(connection: Connection, pass: &'static PasswordStore, forget_password_on_lock: bool) -> Result<Self> {
         let store = SecretStore::new(pass).await?;
 
         {
@@ -90,7 +91,8 @@ impl Service<'static> {
         }
 
         Ok(Service {
-            store
+            store,
+            forget_password_on_lock
         })
     }
 
@@ -198,9 +200,13 @@ impl Service<'static> {
         Ok((paths, vec![]))
     }
 
-    async fn lock(&self, _objects: Vec<OwnedObjectPath>) -> (Vec<ObjectPath>, ObjectPath) {
-        // we don't support locking
-        (vec![], EMPTY_PATH)
+    async fn lock(&self, _objects: Vec<OwnedObjectPath>) -> Result<(Vec<ObjectPath>, ObjectPath)> {
+        if self.forget_password_on_lock {
+            self.store.pass.gpg_forget_cached_password().await?;
+        }
+
+        // we return an empty array here because no items are ever actually locked - they can be accessed without being unlocked
+        Ok((vec![], EMPTY_PATH))
     }
 
     async fn unlock(&self, objects: Vec<OwnedObjectPath>) -> (Vec<OwnedObjectPath>, ObjectPath) {

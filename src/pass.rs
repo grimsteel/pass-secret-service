@@ -27,17 +27,20 @@ pub struct PasswordStore {
 
 impl PasswordStore {
     /// Initialize this PasswordStore instance from env vars
-    pub fn from_env() -> Result<Self> {
+    pub fn from_env(password_store_dir: Option<PathBuf>) -> Result<Self> {
         let mut env: HashMap<String, String> = env::vars().collect();
 
         // Either ~/.password-store or $PASSWORD_STORE_DIR
-        let directory = env
-            .get("PASSWORD_STORE_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                let home = Path::new(env.get("HOME").expect("$HOME must be set"));
-                home.join(".password-store")
-            });
+        let directory = password_store_dir
+            .unwrap_or_else(||
+                env
+                    .get("PASSWORD_STORE_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        let home = Path::new(env.get("HOME").expect("$HOME must be set"));
+                        home.join(".password-store")
+                    })
+            );
 
         let gpg_opts = env.remove("PASSWORD_STORE_GPG_OPTS");
 
@@ -250,4 +253,84 @@ impl PasswordStore {
     pub async fn remove_dir(&self, dir: impl AsRef<Path>) -> Result {
         Ok(remove_dir_all(self.directory.join(dir)).await?)
     }
+
+    /// make gpg-agent forget the cached password for the key associated with this password store
+    pub async fn gpg_forget_cached_password(&self) -> Result {
+        let gpg_id = self.get_gpg_id(&self.directory).await?;
+
+        // get the keygrip for this key
+        let gpg_result = self.make_gpg_process()
+            .arg("--batch")
+            .arg("--with-colons")
+            .arg("--with-keygrip")
+            .arg("--list-key")
+            .arg(gpg_id)
+            .output().await?;
+
+        // return any errors that occurred
+        if !gpg_result.status.success() {
+            return Err(Error::GpgError(String::from_utf8_lossy(&gpg_result.stderr).into_owned()));
+        }
+
+        let gpg_out = String::from_utf8(gpg_result.stdout).expect("gpg colon output is valid UTF-8");
+
+        let mut gpg_line_iter = gpg_out
+            .trim()
+            .lines()
+            .map(|line| line.split(':'));
+
+        // find the (sub)key for encryption
+        if gpg_line_iter.position(|mut line| {
+            // Field 1: type (index 0)
+            let Some(key_type) = line.nth(0) else { return false; };
+
+            // public key or subkey
+            if key_type != "pub" && key_type != "sub" { return false; }
+
+            // Field 12: capabilities (index 11, 10 after type is consumed)
+            let Some(caps) = line.nth(10) else { return false; };
+
+            // pubkey or subkey that has the 'e' (encryption) capability
+            caps.contains('e')
+        }).is_none() {
+            // no key with encryption found
+            return Err(Error::GpgError("no encryption key found".into()))
+        }
+
+        // look for keygrip
+        let Some(keygrip) = gpg_line_iter
+            .find_map(|mut line| {
+                let Some(item_type) = line.nth(0) else { return None; };
+
+                // keygrip
+                if item_type != "grp" { return None; }
+
+                // Field 10: keygrip (user id) (index 9, 8 after type is consumed)
+                let Some(keygrip) = line.nth(8) else { return None; };
+
+                Some(keygrip)
+            }) else { return Err(Error::GpgError("no keygrip found".into())) };
+
+        //eprintln!("keygrip: {}", keygrip);
+
+        // make gpg agent forget the passphrase for this key
+        let gpg_agent_command = format!("clear_passphrase --mode=normal {}", keygrip);
+        let gpg_agent_result = Command::new("gpg-connect-agent")
+                .arg(gpg_agent_command)
+                .arg("/bye")
+                .output().await?;
+
+        if !gpg_agent_result.status.success() {
+            return Err(Error::GpgError(String::from_utf8_lossy(&gpg_agent_result.stderr).into_owned()));
+        }
+
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn test_keygrip() {
+    let store = PasswordStore::from_env(None).unwrap();
+
+    store.gpg_forget_cached_password().await.unwrap();
 }

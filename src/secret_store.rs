@@ -119,7 +119,7 @@ pub fn search_collection(attrs: &HashMap<String, String>, db: &Database) -> Resu
 
 #[derive(Debug, Clone)]
 pub struct SecretStore<'a> {
-    pass: &'a PasswordStore,
+    pub pass: &'a PasswordStore,
     collection_dbs: Arc<RwLock<HashMap<String, Database>>>,
     db: Arc<Database>,
 }
@@ -218,7 +218,7 @@ impl<'a> SecretStore<'a> {
         let db = self.db.clone();
         spawn_blocking(move || -> Result<_> {
             let tx = db.begin_read().into_result()?;
-            
+
             let aliases_reverse =
                 raise_nonexistent_table!(tx.open_multimap_table(ALIASES_TABLE_REVERSE));
 
