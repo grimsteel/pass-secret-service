@@ -9,5 +9,9 @@ pub struct CliArgs {
 
     /// make gpg-agent forget the cached key password when any collection is locked
     #[argh(switch, short='f')]
-    pub forget_password_on_lock: bool
+    pub forget_password_on_lock: bool,
+
+    /// print the current version
+    #[argh(switch, short='V', long="version")]
+    pub print_version: bool,
 }
