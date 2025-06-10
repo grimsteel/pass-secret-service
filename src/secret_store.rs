@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, fmt::Debug, fs::Metadata, io, path::Path, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, fmt::Debug, fs::Metadata, io, path::{Path, PathBuf}, sync::Arc};
 
 use nanoid::nanoid;
 use redb::{
@@ -460,6 +460,11 @@ impl<'a> SecretStore<'a> {
             .join(&collection_id)
             .join(ATTRIBUTES_DB);
         Ok(self.pass.stat_file(collection_path).await?)
+    }
+
+    /// get the directory for the given collection id
+    pub fn get_collection_dir(collection_id: &str) -> PathBuf {
+        Path::new(PASS_SUBDIR).join(collection_id)
     }
 
     pub async fn list_secrets(&self, collection_id: &str) -> Result<Vec<String>> {

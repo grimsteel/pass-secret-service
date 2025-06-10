@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::{HashMap, HashSet}, path::PathBuf, sync::Arc};
 
 use nanoid::nanoid;
 use zbus::{
@@ -200,10 +200,33 @@ impl Service<'static> {
         Ok((paths, vec![]))
     }
 
-    async fn lock(&self, _objects: Vec<OwnedObjectPath>) -> Result<(Vec<ObjectPath>, ObjectPath)> {
+    async fn lock(
+        &self,
+        objects: Vec<OwnedObjectPath>,
+        #[zbus(object_server)] object_server: &ObjectServer,
+    ) -> Result<(Vec<ObjectPath>, ObjectPath)> {
         if self.forget_password_on_lock {
-            self.store.pass.gpg_forget_cached_password().await?;
-        }
+            // all parent collection directories for the items given
+            let mut collection_dirs = HashSet::<PathBuf>::new();
+
+            for object_path in objects {
+                collection_dirs.insert(match try_interface(object_server.interface::<_, Item>(&object_path).await)? {
+                    Some(item) => {
+                        // this object is an item
+                        SecretStore::get_collection_dir(&*item.get().await.collection_id)
+                    },
+                    None => {
+                        // this might be a collection
+                        let collection = try_interface(object_server.interface::<_, Collection>(&object_path).await)?
+                            .into_not_found()?;
+                        let collection_dir = SecretStore::get_collection_dir(&*collection.get().await.id);
+                        // this is just to satisfy the borrow checker
+                        collection_dir
+                    }
+                });
+            }
+            self.store.pass.gpg_forget_cached_password(collection_dirs).await?;
+        };
 
         // we return an empty array here because no items are ever actually locked - they can be accessed without being unlocked
         Ok((vec![], EMPTY_PATH))

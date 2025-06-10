@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     fs::{FileType, Metadata},
     io::{self, ErrorKind},
@@ -254,17 +254,22 @@ impl PasswordStore {
         Ok(remove_dir_all(self.directory.join(dir)).await?)
     }
 
-    /// make gpg-agent forget the cached password for the key associated with this password store
-    pub async fn gpg_forget_cached_password(&self) -> Result {
-        let gpg_id = self.get_gpg_id(&self.directory).await?;
+    /// make gpg-agent forget the cached password for the keys associated with the given collections
+    pub async fn gpg_forget_cached_password(&self, collection_dirs: HashSet<impl AsRef<Path>>) -> Result {
+        // all unique GPG key ids to clear cache for
+        let mut gpg_ids = HashSet::new();
 
-        // get the keygrip for this key
+        for dir in collection_dirs {
+            gpg_ids.insert(self.get_gpg_id(self.directory.join(dir)).await?);
+        }
+
+        // get the keygrip for each key
         let gpg_result = self.make_gpg_process()
             .arg("--batch")
             .arg("--with-colons")
             .arg("--with-keygrip")
             .arg("--list-key")
-            .arg(gpg_id)
+            .args(gpg_ids)
             .output().await?;
 
         // return any errors that occurred
@@ -279,58 +284,51 @@ impl PasswordStore {
             .lines()
             .map(|line| line.split(':'));
 
-        // find the (sub)key for encryption
-        if gpg_line_iter.position(|mut line| {
-            // Field 1: type (index 0)
-            let Some(key_type) = line.nth(0) else { return false; };
+        loop {
+            // find the (sub)key for encryption
+            if gpg_line_iter.position(|mut line| {
+                // Field 1: type (index 0)
+                let Some(key_type) = line.nth(0) else { return false; };
 
-            // public key or subkey
-            if key_type != "pub" && key_type != "sub" { return false; }
+                // public key or subkey
+                if key_type != "pub" && key_type != "sub" { return false; }
 
-            // Field 12: capabilities (index 11, 10 after type is consumed)
-            let Some(caps) = line.nth(10) else { return false; };
+                // Field 12: capabilities (index 11, 10 after type is consumed)
+                let Some(caps) = line.nth(10) else { return false; };
 
-            // pubkey or subkey that has the 'e' (encryption) capability
-            caps.contains('e')
-        }).is_none() {
-            // no key with encryption found
-            return Err(Error::GpgError("no encryption key found".into()))
-        }
+                // pubkey or subkey that has the 'e' (encryption) capability
+                caps.contains('e')
+            }).is_none() {
+                // no more keys with encryption capability found - break
+                break;
+            }
 
-        // look for keygrip
-        let Some(keygrip) = gpg_line_iter
-            .find_map(|mut line| {
-                let Some(item_type) = line.nth(0) else { return None; };
+            // look for the following keygrip
+            let Some(keygrip) = gpg_line_iter
+                .find_map(|mut line| {
+                    let Some(item_type) = line.nth(0) else { return None; };
 
-                // keygrip
-                if item_type != "grp" { return None; }
+                    // keygrip
+                    if item_type != "grp" { return None; }
 
-                // Field 10: keygrip (user id) (index 9, 8 after type is consumed)
-                let Some(keygrip) = line.nth(8) else { return None; };
+                    // Field 10: keygrip (user id) (index 9, 8 after type is consumed)
+                    let Some(keygrip) = line.nth(8) else { return None; };
 
-                Some(keygrip)
-            }) else { return Err(Error::GpgError("no keygrip found".into())) };
+                    Some(keygrip)
+                }) else { return Err(Error::GpgError("no keygrip found".into())) };
 
-        //eprintln!("keygrip: {}", keygrip);
+            // make gpg agent forget the passphrase for this key
+            let gpg_agent_command = format!("clear_passphrase --mode=normal {}", keygrip);
+            let gpg_agent_result = Command::new("gpg-connect-agent")
+                    .arg(gpg_agent_command)
+                    .arg("/bye")
+                    .output().await?;
 
-        // make gpg agent forget the passphrase for this key
-        let gpg_agent_command = format!("clear_passphrase --mode=normal {}", keygrip);
-        let gpg_agent_result = Command::new("gpg-connect-agent")
-                .arg(gpg_agent_command)
-                .arg("/bye")
-                .output().await?;
-
-        if !gpg_agent_result.status.success() {
-            return Err(Error::GpgError(String::from_utf8_lossy(&gpg_agent_result.stderr).into_owned()));
+            if !gpg_agent_result.status.success() {
+                return Err(Error::GpgError(String::from_utf8_lossy(&gpg_agent_result.stderr).into_owned()));
+            }
         }
 
         Ok(())
     }
-}
-
-#[tokio::test]
-async fn test_keygrip() {
-    let store = PasswordStore::from_env(None).unwrap();
-
-    store.gpg_forget_cached_password().await.unwrap();
 }

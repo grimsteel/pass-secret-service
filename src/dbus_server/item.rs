@@ -39,9 +39,7 @@ impl<'a> Item<'a> {
             .await?;
         Ok(())
     }
-}
 
-impl<'a> Item<'a> {
     pub async fn read_with_session(&self, header: &Header<'_>, session: &InterfaceDeref<'_, Session>) -> Result<Secret> {
         let secret_value = self
             .store
