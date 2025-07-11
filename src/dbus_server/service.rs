@@ -2,11 +2,11 @@ use std::{collections::{HashMap, HashSet}, path::PathBuf, sync::Arc};
 
 use nanoid::nanoid;
 use zbus::{
-    fdo, interface, message::Header, object_server::SignalContext, zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value}, Connection, ObjectServer
+    fdo, interface, message::Header, object_server::SignalContext, zvariant::{Array, ObjectPath, OwnedObjectPath, OwnedValue, Value}, Connection, ObjectServer
 };
 
 use crate::{
-    error::{Error, OptionNoneNotFound, Result}, pass::PasswordStore, secret_store::{slugify, SecretStore, NANOID_ALPHABET}
+    dbus_server::secret_transfer::{DhIetf1024Sha256Aes128CbcPkcs7Transfer, SessionTransfer}, error::{Error, OptionNoneNotFound, Result}, pass::PasswordStore, secret_store::{slugify, SecretStore, NANOID_ALPHABET}
 };
 
 use super::{
@@ -108,7 +108,7 @@ impl Service<'static> {
     async fn open_session(
         &self,
         algorithm: String,
-        _input: OwnedValue,
+        input: OwnedValue,
         #[zbus(header)] header: Header<'_>,
         #[zbus(object_server)] object_server: &ObjectServer,
         #[zbus(connection)] connection: &Connection
@@ -116,13 +116,22 @@ impl Service<'static> {
         let client_name = header.sender().unwrap().to_owned().into();
         let id = nanoid!(8, &NANOID_ALPHABET);
         let path = session_path(id).unwrap();
-        let session_transfer = match &*algorithm {
+        let (session_transfer, additional_data): (Box<dyn SessionTransfer + Send + Sync>, Value) = match &*algorithm {
             "plain" => {
-                Box::new(PlainTextTransfer)
+                (Box::new(PlainTextTransfer), "".into())
             }
-            /*"dh-ietf1024-sha256-aes128-cbc-pkcs7" => {
-                Box::new(PlainTextTransfer)
-            }*/
+            "dh-ietf1024-sha256-aes128-cbc-pkcs7" => {
+                // input should be a byte array
+                let client_pub_key = input.downcast_ref::<Array>()
+                    .ok()
+                    .and_then(|v: Array| -> Option<Vec<u8>> { v.try_into().ok() })
+                    .ok_or_else(|| fdo::Error::InvalidArgs("expected OpenSession input to be of type `ay`".into()))?;
+
+                let transfer = DhIetf1024Sha256Aes128CbcPkcs7Transfer::new(&client_pub_key[..])?;
+                // send the client the pubkey
+                let pub_key = Value::from(transfer.get_pub_key());
+                (Box::new(transfer), pub_key)
+            }
             _ => return Err(fdo::Error::NotSupported(
                 "Algorithm is not supported".into(),
             ))
@@ -134,7 +143,7 @@ impl Service<'static> {
             connection.clone()
         );
         object_server.at(&path, session).await?;
-        Ok(("".into(), path))
+        Ok((additional_data, path))
     }
 
     async fn create_collection(

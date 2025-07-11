@@ -15,6 +15,8 @@ pub enum Error {
     DbusError(#[from] zbus::Error),
     #[error("ReDB Error: {0}")]
     RedbError(#[from] redb::Error),
+    #[error("Secret encryption error: {0}")]
+    EncryptionError(&'static str),
     #[error("GPG Error: {0}")]
     GpgError(String),
     #[error("Pass is not initialized")]
@@ -30,7 +32,6 @@ impl DBusError for Error {
         let name = self.name();
         #[allow(deprecated)]
         let msg = message::Builder::error(msg, name)?;
-
         match self {
             Error::IoError(e) => msg.build(&(e.to_string(),)),
             Error::DbusError(e) => msg.build(&(e.to_string(),)),
@@ -49,6 +50,7 @@ impl DBusError for Error {
             Error::DbusError(_) => "org.freedesktop.zbus.Error",
             Error::RedbError(_) => "me.grimsteel.PassSecretService.ReDBError",
             Error::GpgError(_) => "me.grimsteel.PassSecretService.GPGError",
+            Error::EncryptionError(_) => "me.grimsteel.PassSecretService.EncryptionError",
             Error::NotInitialized => "me.grimsteel.PassSecretService.PassNotInitialized",
             Error::InvalidSession => "org.freedesktop.Secret.Error.NoSession",
             Error::PermissionDenied => "org.freedesktop.DBus.Error.AccessDenied",

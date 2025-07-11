@@ -11,7 +11,8 @@ futures-util = "0.3.30"
 hkdf = { version = "0.12.4", features = ["std"] }
 libc = "0.2.155"
 nanoid = "0.4.0"
-num = "0.4.3"
+num = { version = "0.4.3", features = ["rand"] }
+rand = "0.8.5"
 redb = "2.1.1"
 serde = "1.0.204"
 sha2 = "0.10.9"
