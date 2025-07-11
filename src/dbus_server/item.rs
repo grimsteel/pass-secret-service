@@ -10,9 +10,10 @@ use crate::{
 use super::{
     session::Session,
     utils::{
-        collection_path, secret_alias_path, secret_path, time_to_int, try_interface, Secret,
+        collection_path, secret_alias_path, secret_path, time_to_int, try_interface,
         EMPTY_PATH,
     },
+    secret_transfer::Secret
 };
 
 #[derive(Clone, Debug)]

@@ -1,7 +1,6 @@
 use std::{fmt::Display, io, time::SystemTime};
 
-use serde::{Deserialize, Serialize};
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, Type};
+use zbus::zvariant::ObjectPath;
 
 pub const EMPTY_PATH: ObjectPath = ObjectPath::from_static_str_unchecked("/");
 
@@ -43,12 +42,4 @@ pub fn time_to_int(time: io::Result<SystemTime>) -> u64 {
         .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
         .map(|t| t.as_secs())
         .unwrap_or_default()
-}
-
-#[derive(Type, Debug, Deserialize, Serialize, PartialEq)]
-pub struct Secret {
-    pub session: OwnedObjectPath,
-    pub parameters: Vec<u8>,
-    pub value: Vec<u8>,
-    pub content_type: String,
 }

@@ -6,17 +6,16 @@ use zbus::{
 };
 
 use crate::{
-    error::{Error, OptionNoneNotFound, Result},
-    pass::PasswordStore,
-    secret_store::{slugify, SecretStore, NANOID_ALPHABET},
+    error::{Error, OptionNoneNotFound, Result}, pass::PasswordStore, secret_store::{slugify, SecretStore, NANOID_ALPHABET}
 };
 
 use super::{
     collection::Collection,
     item::Item,
-    session::{Session, SessionAlgorithm},
+    session::Session,
+    secret_transfer::{PlainTextTransfer, Secret},
     utils::{
-        alias_path, collection_path, secret_alias_path, secret_path, session_path, try_interface, Secret, EMPTY_PATH
+        alias_path, collection_path, secret_alias_path, secret_path, session_path, try_interface, EMPTY_PATH
     },
 };
 
@@ -115,24 +114,27 @@ impl Service<'static> {
         #[zbus(connection)] connection: &Connection
     ) -> fdo::Result<(Value, ObjectPath)> {
         let client_name = header.sender().unwrap().to_owned().into();
-        match &*algorithm {
+        let id = nanoid!(8, &NANOID_ALPHABET);
+        let path = session_path(id).unwrap();
+        let session_transfer = match &*algorithm {
             "plain" => {
-                let id = nanoid!(8, &NANOID_ALPHABET);
-                let path = session_path(id).unwrap();
-                let session = Session::new(
-                    SessionAlgorithm::Plain,
-                    client_name,
-                    path.clone().into(),
-                    connection.clone()
-                );
-                object_server.at(&path, session).await?;
-                Ok(("".into(), path))
+                Box::new(PlainTextTransfer)
             }
-            // TODO: support other algs
-            _ => Err(fdo::Error::NotSupported(
+            /*"dh-ietf1024-sha256-aes128-cbc-pkcs7" => {
+                Box::new(PlainTextTransfer)
+            }*/
+            _ => return Err(fdo::Error::NotSupported(
                 "Algorithm is not supported".into(),
-            )),
-        }
+            ))
+        };
+        let session = Session::new(
+            session_transfer,
+            client_name,
+            path.clone().into(),
+            connection.clone()
+        );
+        object_server.at(&path, session).await?;
+        Ok(("".into(), path))
     }
 
     async fn create_collection(

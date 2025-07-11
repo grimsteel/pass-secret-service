@@ -4,12 +4,18 @@ version = "0.3.0"
 edition = "2021"
 
 [dependencies]
+aes = "0.8.4"
 argh = "0.1.13"
+cbc = { version = "0.1.2", features = ["std"] }
 futures-util = "0.3.30"
+hkdf = { version = "0.12.4", features = ["std"] }
 libc = "0.2.155"
 nanoid = "0.4.0"
+num = "0.4.3"
 redb = "2.1.1"
 serde = "1.0.204"
+sha2 = "0.10.9"
+thiserror = "2.0.12"
 tokio = { version = "1.38.1", features = ["fs", "rt", "rt-multi-thread", "macros", "process"] }
 zbus = { version = "4.3.1", default-features = false, features = ["tokio"] }
 

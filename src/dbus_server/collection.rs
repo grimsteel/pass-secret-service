@@ -9,14 +9,12 @@ use zbus::{
 };
 
 use crate::{
-    error::{Error, Result},
-    secret_store::SecretStore,
+    dbus_server::secret_transfer::Secret, error::{Error, Result}, secret_store::SecretStore
 };
 
 use super::{
     item::Item, session::Session, utils::{
-        alias_path, collection_path, secret_alias_path, secret_path, time_to_int, try_interface,
-        Secret, EMPTY_PATH,
+        alias_path, collection_path, secret_alias_path, secret_path, time_to_int, try_interface, EMPTY_PATH,
     }
 };
 

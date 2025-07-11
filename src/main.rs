@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let connection = Connection::session().await?;
 
-    eprintln!("D-Bus session connection established.");
+    eprintln!("D-Bus session connection established. Unique name: {}", connection.unique_name().map(|s| s.as_str()).unwrap_or("?"));
 
     let service = Service::init(connection.clone(), pass, args.forget_password_on_lock).await?;
 
@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     connection.request_name("org.freedesktop.secrets").await?;
 
-    eprintln!("Acquired `org.freedesktop.secrets` name.");
+    eprintln!("Acquired well-known name: `org.freedesktop.secrets`");
 
     loop {
         std::future::pending::<()>().await;

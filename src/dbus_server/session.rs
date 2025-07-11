@@ -6,21 +6,18 @@ use futures_util::StreamExt;
 
 use crate::error::{Error, Result};
 
-use super::utils::{try_interface, Secret};
-
-pub enum SessionAlgorithm {
-    Plain,
-}
+use super::utils::try_interface;
+use super::secret_transfer::{Secret, SessionTransfer};
 
 pub struct Session {
-    alg: SessionAlgorithm,
+    transfer: Box<dyn SessionTransfer + Send + Sync>,
     client_name: OwnedUniqueName,
     path: OwnedObjectPath,
     closed: Option<Sender<()>>
 }
 impl Session {
     pub fn new(
-        alg: SessionAlgorithm,
+        transfer: Box<dyn SessionTransfer + Send + Sync>,
         client_name: OwnedUniqueName,
         path: OwnedObjectPath,
         connection: Connection
@@ -53,24 +50,22 @@ impl Session {
 
             zbus::Result::Ok(())
         });
-        
+
         Self {
-            alg,
+            transfer,
             client_name,
             path,
             closed: Some(tx)
         }
     }
-    
+
     pub fn decrypt(&self, secret: Secret, header: &Header<'_>) -> Result<Vec<u8>> {
         // make sure they're allowed to do this
         if !header.sender().is_some_and(|s| self.client_name == *s) {
             return Err(Error::PermissionDenied);
         }
 
-        match self.alg {
-            SessionAlgorithm::Plain => Ok(secret.value),
-        }
+        self.transfer.decrypt(secret)
     }
 
     pub fn encrypt(&self, secret: Vec<u8>, header: &Header<'_>) -> Result<Secret> {
@@ -79,14 +74,7 @@ impl Session {
             return Err(Error::PermissionDenied);
         }
 
-        match self.alg {
-            SessionAlgorithm::Plain => Ok(Secret {
-                session: self.path.clone(),
-                parameters: vec![],
-                value: secret,
-                content_type: "text/plain".into(),
-            }),
-        }
+        self.transfer.encrypt(secret, self.path.clone())
     }
 }
 
@@ -104,7 +92,7 @@ impl Session {
             if let Some(tx) = self.closed.take() {
                 let _ = tx.send(());
             }
-            
+
             Ok(())
         } else {
             Err(fdo::Error::AccessDenied(
