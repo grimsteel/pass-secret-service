@@ -1,7 +1,4 @@
-use std::{
-    fmt::Display,
-    io::{self, ErrorKind},
-};
+use std::io::{self, ErrorKind};
 
 use zbus::{
     fdo,
@@ -10,34 +7,22 @@ use zbus::{
     DBusError, Message,
 };
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
-    IoError(io::Error),
-    DbusError(zbus::Error),
-    RedbError(redb::Error),
+    #[error("I/O Error: {0}")]
+    IoError(#[from] io::Error),
+    #[error("D-Bus Error: {0}")]
+    DbusError(#[from] zbus::Error),
+    #[error("ReDB Error: {0}")]
+    RedbError(#[from] redb::Error),
+    #[error("GPG Error: {0}")]
     GpgError(String),
-    // pass is not initialized
+    #[error("Pass is not initialized")]
     NotInitialized,
+    #[error("Invalid secret service session")]
     InvalidSession,
+    #[error("Access denied")]
     PermissionDenied,
-}
-
-impl From<io::Error> for Error {
-    fn from(value: io::Error) -> Self {
-        Self::IoError(value)
-    }
-}
-
-impl From<zbus::Error> for Error {
-    fn from(value: zbus::Error) -> Self {
-        Self::DbusError(value)
-    }
-}
-
-impl From<redb::Error> for Error {
-    fn from(value: redb::Error) -> Self {
-        Self::RedbError(value)
-    }
 }
 
 impl DBusError for Error {
@@ -79,20 +64,6 @@ impl DBusError for Error {
     }
 }
 
-impl Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::IoError(e) => write!(f, "I/O Error: {e}"),
-            Error::DbusError(e) => write!(f, "D-Bus Error: {e}"),
-            Error::GpgError(e) => write!(f, "GPG Error; {e}"),
-            Error::RedbError(e) => write!(f, "ReDB Error: {e}"),
-            Error::NotInitialized => write!(f, "Pass is not initialized"),
-            Error::InvalidSession => write!(f, "Invalid secret service session"),
-            Error::PermissionDenied => write!(f, "Access denied"),
-        }
-    }
-}
-
 impl From<Error> for fdo::Error {
     fn from(value: Error) -> Self {
         match value {
@@ -103,8 +74,6 @@ impl From<Error> for fdo::Error {
         }
     }
 }
-
-impl std::error::Error for Error {}
 
 pub type Result<T = ()> = std::result::Result<T, Error>;
 
