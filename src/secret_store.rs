@@ -291,7 +291,7 @@ impl<'a> SecretStore<'a> {
 
     /// create a collection, with an optional label and alias
     /// returns the created collection name
-    /// if `label` is `None`, the collection will be called "Unttiled Collection"
+    /// if `label` is `None`, the collection will be called "Untitled Collection"
     pub async fn create_collection(
         &self,
         label: Option<String>,
@@ -300,6 +300,7 @@ impl<'a> SecretStore<'a> {
         // I assume aliases are case sensitive
 
         let db = self.db.clone();
+        let collection_dbs = self.collection_dbs.clone();
 
         let collection_id = spawn_blocking(move || -> RedbResult<_> {
             let tx = db.begin_write()?;
@@ -312,7 +313,7 @@ impl<'a> SecretStore<'a> {
                 .map(Cow::Owned)
                 .unwrap_or("Untitled Collection".into());
 
-            // an existing alias
+            // an existing alias - we return the existing collection it points to and don't creaet a new one
             let existing_id = if let Some(alias) = alias.as_ref() {
                 if let Some(collection_id) = aliases.get(alias.as_str())? {
                     let id = collection_id.value();
@@ -335,7 +336,13 @@ impl<'a> SecretStore<'a> {
             let id = if let Some(id) = existing_id {
                 id
             } else {
-                let id = format!("{}_{}", slugify(&label), nanoid!(4, &NANOID_ALPHABET));
+                // use a unique ID if it already exists. otherwise, just use the id they specified
+                let label_key_exists = collection_dbs.blocking_read().contains_key(label.as_ref());
+                let id = if label_key_exists {
+                    format!("{}_{}", slugify(&label), nanoid!(4, &NANOID_ALPHABET))
+                } else {
+                    label.clone().into_owned()
+                };
 
                 // set the label and alias
                 if let Some(alias) = alias.as_ref() {
