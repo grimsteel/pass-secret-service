@@ -1,6 +1,9 @@
 use std::{collections::HashMap, sync::Arc};
 
-use zbus::{fdo, interface, message::Header, object_server::InterfaceDeref, zvariant::ObjectPath, Connection, ObjectServer};
+use zbus::{
+    fdo, interface, message::Header, object_server::InterfaceDeref, zvariant::ObjectPath,
+    Connection, ObjectServer,
+};
 
 use crate::{
     error::{Error, Result},
@@ -8,12 +11,11 @@ use crate::{
 };
 
 use super::{
+    secret_transfer::Secret,
     session::Session,
     utils::{
-        collection_path, secret_alias_path, secret_path, time_to_int, try_interface,
-        EMPTY_PATH,
+        collection_path, secret_alias_path, secret_path, time_to_int, try_interface, EMPTY_PATH,
     },
-    secret_transfer::Secret
 };
 
 #[derive(Clone, Debug)]
@@ -41,7 +43,11 @@ impl<'a> Item<'a> {
         Ok(())
     }
 
-    pub async fn read_with_session(&self, header: &Header<'_>, session: &InterfaceDeref<'_, Session>) -> Result<Secret> {
+    pub async fn read_with_session(
+        &self,
+        header: &Header<'_>,
+        session: &InterfaceDeref<'_, Session>,
+    ) -> Result<Secret> {
         let secret_value = self
             .store
             .read_secret(&*self.collection_id, &*self.id, true)
@@ -89,14 +95,16 @@ impl Item<'static> {
         session: ObjectPath<'_>,
         #[zbus(header)] header: Header<'_>,
         #[zbus(object_server)] object_server: &ObjectServer,
-    ) -> Result<(Secret, )> {
-        Ok((self.read_with_session(
-            &header,
-            &try_interface(object_server.interface::<_, Session>(&session).await)?
-                .ok_or(Error::InvalidSession)?
-                .get()
-                .await
-        ).await?, ))
+    ) -> Result<(Secret,)> {
+        Ok((self
+            .read_with_session(
+                &header,
+                &try_interface(object_server.interface::<_, Session>(&session).await)?
+                    .ok_or(Error::InvalidSession)?
+                    .get()
+                    .await,
+            )
+            .await?,))
     }
 
     async fn set_secret(

@@ -101,7 +101,10 @@ impl<T> OptionNoneNotFound<T> for Option<T> {
 
 macro_rules! raise_nonexistent_table {
     ($expression:expr) => {
-        raise_nonexistent_table!($expression, Err(io::Error::from(io::ErrorKind::NotFound).into()))
+        raise_nonexistent_table!(
+            $expression,
+            Err(io::Error::from(io::ErrorKind::NotFound).into())
+        )
     };
     ($expression:expr, $default:expr) => {
         match $expression {

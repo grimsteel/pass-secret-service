@@ -9,13 +9,18 @@ use zbus::{
 };
 
 use crate::{
-    dbus_server::secret_transfer::Secret, error::{Error, Result}, secret_store::SecretStore
+    dbus_server::secret_transfer::Secret,
+    error::{Error, Result},
+    secret_store::SecretStore,
 };
 
 use super::{
-    item::Item, session::Session, utils::{
-        alias_path, collection_path, secret_alias_path, secret_path, time_to_int, try_interface, EMPTY_PATH,
-    }
+    item::Item,
+    session::Session,
+    utils::{
+        alias_path, collection_path, secret_alias_path, secret_path, time_to_int, try_interface,
+        EMPTY_PATH,
+    },
 };
 
 #[derive(Clone, Debug)]
@@ -90,7 +95,10 @@ impl Collection<'static> {
             .store
             .search_collection(self.id.clone(), Arc::new(attributes))
             .await?;
-        let paths = items.into_iter().filter_map(|item| secret_path(&*self.id, &item)).collect();
+        let paths = items
+            .into_iter()
+            .filter_map(|item| secret_path(&*self.id, &item))
+            .collect();
 
         Ok(paths)
     }

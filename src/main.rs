@@ -20,11 +20,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let pass = Box::leak(Box::new(PasswordStore::from_env(args.password_store_dir.map(|d| d.into()))?));
+    let pass = Box::leak(Box::new(PasswordStore::from_env(
+        args.password_store_dir.map(|d| d.into()),
+    )?));
 
     let connection = Connection::session().await?;
 
-    eprintln!("D-Bus session connection established. Unique name: {}", connection.unique_name().map(|s| s.as_str()).unwrap_or("?"));
+    eprintln!(
+        "D-Bus session connection established. Unique name: {}",
+        connection.unique_name().map(|s| s.as_str()).unwrap_or("?")
+    );
 
     let service = Service::init(connection.clone(), pass, args.forget_password_on_lock).await?;
 

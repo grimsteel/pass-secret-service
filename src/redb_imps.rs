@@ -83,11 +83,13 @@ where
     V: Value,
     for<'a> K::SelfType<'a>: Hash + Eq,
 {
-    type SelfType<'a> = HashMap<K::SelfType<'a>, V::SelfType<'a>>
+    type SelfType<'a>
+        = HashMap<K::SelfType<'a>, V::SelfType<'a>>
     where
         Self: 'a;
 
-    type AsBytes<'a> = Vec<u8>
+    type AsBytes<'a>
+        = Vec<u8>
     where
         Self: 'a;
 

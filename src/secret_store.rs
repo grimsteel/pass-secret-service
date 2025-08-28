@@ -1,4 +1,12 @@
-use std::{borrow::Cow, collections::HashMap, fmt::Debug, fs::Metadata, io, path::{Path, PathBuf}, sync::Arc};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    fmt::Debug,
+    fs::Metadata,
+    io,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use nanoid::nanoid;
 use redb::{
@@ -80,7 +88,8 @@ pub fn search_collection(attrs: &HashMap<String, String>, db: &Database) -> Resu
 
     let tx = db.begin_read().into_result()?;
     let attributes = raise_nonexistent_table!(tx.open_multimap_table(ATTRIBUTES_TABLE), Ok(vec![]));
-    let attributes_reverse = raise_nonexistent_table!(tx.open_table(ATTRIBUTES_TABLE_REVERSE), Ok(vec![]));
+    let attributes_reverse =
+        raise_nonexistent_table!(tx.open_table(ATTRIBUTES_TABLE_REVERSE), Ok(vec![]));
 
     let mut attr_iter = attrs.into_iter();
 
@@ -193,7 +202,10 @@ impl<'a> SecretStore<'a> {
         Ok(spawn_blocking(move || -> Result<_> {
             // open the aliases table
             let tx = db.begin_read().into_result()?;
-            let table = raise_nonexistent_table!(tx.open_multimap_table(ALIASES_TABLE_REVERSE), Ok(HashMap::new()));
+            let table = raise_nonexistent_table!(
+                tx.open_multimap_table(ALIASES_TABLE_REVERSE),
+                Ok(HashMap::new())
+            );
             Ok(table
                 .iter()
                 .into_result()?

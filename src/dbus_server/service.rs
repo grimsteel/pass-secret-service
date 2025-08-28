@@ -1,32 +1,48 @@
-use std::{collections::{HashMap, HashSet}, path::PathBuf, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use nanoid::nanoid;
 use zbus::{
-    fdo, interface, message::Header, object_server::SignalContext, zvariant::{Array, ObjectPath, OwnedObjectPath, OwnedValue, Value}, Connection, ObjectServer
+    fdo, interface,
+    message::Header,
+    object_server::SignalContext,
+    zvariant::{Array, ObjectPath, OwnedObjectPath, OwnedValue, Value},
+    Connection, ObjectServer,
 };
 
 use crate::{
-    dbus_server::secret_transfer::{DhIetf1024Sha256Aes128CbcPkcs7Transfer, SessionTransfer}, error::{Error, OptionNoneNotFound, Result}, pass::PasswordStore, secret_store::{slugify, SecretStore, NANOID_ALPHABET}
+    dbus_server::secret_transfer::{DhIetf1024Sha256Aes128CbcPkcs7Transfer, SessionTransfer},
+    error::{Error, OptionNoneNotFound, Result},
+    pass::PasswordStore,
+    secret_store::{slugify, SecretStore, NANOID_ALPHABET},
 };
 
 use super::{
     collection::Collection,
     item::Item,
-    session::Session,
     secret_transfer::{PlainTextTransfer, Secret},
+    session::Session,
     utils::{
-        alias_path, collection_path, secret_alias_path, secret_path, session_path, try_interface, EMPTY_PATH
+        alias_path, collection_path, secret_alias_path, secret_path, session_path, try_interface,
+        EMPTY_PATH,
     },
 };
 
 #[derive(Debug)]
 pub struct Service<'a> {
     store: SecretStore<'a>,
-    forget_password_on_lock: bool
+    forget_password_on_lock: bool,
 }
 
 impl Service<'static> {
-    pub async fn init(connection: Connection, pass: &'static PasswordStore, forget_password_on_lock: bool) -> Result<Self> {
+    pub async fn init(
+        connection: Connection,
+        pass: &'static PasswordStore,
+        forget_password_on_lock: bool,
+    ) -> Result<Self> {
         let store = SecretStore::new(pass).await?;
 
         {
@@ -91,7 +107,7 @@ impl Service<'static> {
 
         Ok(Service {
             store,
-            forget_password_on_lock
+            forget_password_on_lock,
         })
     }
 
@@ -111,36 +127,43 @@ impl Service<'static> {
         input: OwnedValue,
         #[zbus(header)] header: Header<'_>,
         #[zbus(object_server)] object_server: &ObjectServer,
-        #[zbus(connection)] connection: &Connection
+        #[zbus(connection)] connection: &Connection,
     ) -> fdo::Result<(Value, ObjectPath)> {
         let client_name = header.sender().unwrap().to_owned().into();
         let id = nanoid!(8, &NANOID_ALPHABET);
         let path = session_path(id).unwrap();
-        let (session_transfer, additional_data): (Box<dyn SessionTransfer + Send + Sync>, Value) = match &*algorithm {
-            "plain" => {
-                (Box::new(PlainTextTransfer), "".into())
-            }
-            "dh-ietf1024-sha256-aes128-cbc-pkcs7" => {
-                // input should be a byte array
-                let client_pub_key = input.downcast_ref::<Array>()
-                    .ok()
-                    .and_then(|v: Array| -> Option<Vec<u8>> { v.try_into().ok() })
-                    .ok_or_else(|| fdo::Error::InvalidArgs("expected OpenSession input to be of type `ay`".into()))?;
+        let (session_transfer, additional_data): (Box<dyn SessionTransfer + Send + Sync>, Value) =
+            match &*algorithm {
+                "plain" => (Box::new(PlainTextTransfer), "".into()),
+                "dh-ietf1024-sha256-aes128-cbc-pkcs7" => {
+                    // input should be a byte array
+                    let client_pub_key = input
+                        .downcast_ref::<Array>()
+                        .ok()
+                        .and_then(|v: Array| -> Option<Vec<u8>> { v.try_into().ok() })
+                        .ok_or_else(|| {
+                            fdo::Error::InvalidArgs(
+                                "expected OpenSession input to be of type `ay`".into(),
+                            )
+                        })?;
 
-                let transfer = DhIetf1024Sha256Aes128CbcPkcs7Transfer::new(&client_pub_key[..])?;
-                // send the client the pubkey
-                let pub_key = Value::from(transfer.get_pub_key());
-                (Box::new(transfer), pub_key)
-            }
-            _ => return Err(fdo::Error::NotSupported(
-                "Algorithm is not supported".into(),
-            ))
-        };
+                    let transfer =
+                        DhIetf1024Sha256Aes128CbcPkcs7Transfer::new(&client_pub_key[..])?;
+                    // send the client the pubkey
+                    let pub_key = Value::from(transfer.get_pub_key());
+                    (Box::new(transfer), pub_key)
+                }
+                _ => {
+                    return Err(fdo::Error::NotSupported(
+                        "Algorithm is not supported".into(),
+                    ))
+                }
+            };
         let session = Session::new(
             session_transfer,
             client_name,
             path.clone().into(),
-            connection.clone()
+            connection.clone(),
         );
         object_server.at(&path, session).await?;
         Ok((additional_data, path))
@@ -221,22 +244,30 @@ impl Service<'static> {
             let mut collection_dirs = HashSet::<PathBuf>::new();
 
             for object_path in objects {
-                collection_dirs.insert(match try_interface(object_server.interface::<_, Item>(&object_path).await)? {
-                    Some(item) => {
-                        // this object is an item
-                        SecretStore::get_collection_dir(&*item.get().await.collection_id)
-                    },
-                    None => {
-                        // this might be a collection
-                        let collection = try_interface(object_server.interface::<_, Collection>(&object_path).await)?
+                collection_dirs.insert(
+                    match try_interface(object_server.interface::<_, Item>(&object_path).await)? {
+                        Some(item) => {
+                            // this object is an item
+                            SecretStore::get_collection_dir(&*item.get().await.collection_id)
+                        }
+                        None => {
+                            // this might be a collection
+                            let collection = try_interface(
+                                object_server.interface::<_, Collection>(&object_path).await,
+                            )?
                             .into_not_found()?;
-                        let collection_dir = SecretStore::get_collection_dir(&*collection.get().await.id);
-                        // this is just to satisfy the borrow checker
-                        collection_dir
-                    }
-                });
+                            let collection_dir =
+                                SecretStore::get_collection_dir(&*collection.get().await.id);
+                            // this is just to satisfy the borrow checker
+                            collection_dir
+                        }
+                    },
+                );
             }
-            self.store.pass.gpg_forget_cached_password(collection_dirs).await?;
+            self.store
+                .pass
+                .gpg_forget_cached_password(collection_dirs)
+                .await?;
         };
 
         // we return an empty array here because no items are ever actually locked - they can be accessed without being unlocked
@@ -253,7 +284,7 @@ impl Service<'static> {
         items: Vec<ObjectPath<'_>>,
         session: ObjectPath<'_>,
         #[zbus(object_server)] object_server: &ObjectServer,
-        #[zbus(header)] header: Header<'_>
+        #[zbus(header)] header: Header<'_>,
     ) -> Result<HashMap<OwnedObjectPath, Secret>> {
         let session_ref = try_interface(object_server.interface::<_, Session>(&session).await)?
             .ok_or(Error::InvalidSession)?;
@@ -264,7 +295,11 @@ impl Service<'static> {
         for item_path in items {
             let item_ref = try_interface(object_server.interface::<_, Item>(&item_path).await)?
                 .into_not_found()?;
-            let secret = item_ref.get().await.read_with_session(&header, &session).await?;
+            let secret = item_ref
+                .get()
+                .await
+                .read_with_session(&header, &session)
+                .await?;
             results.insert(item_path.into(), secret);
         }
 
