@@ -31,16 +31,14 @@ impl PasswordStore {
         let mut env: HashMap<String, String> = env::vars().collect();
 
         // Either ~/.password-store or $PASSWORD_STORE_DIR
-        let directory = password_store_dir
-            .unwrap_or_else(||
-                env
-                    .get("PASSWORD_STORE_DIR")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| {
-                        let home = Path::new(env.get("HOME").expect("$HOME must be set"));
-                        home.join(".password-store")
-                    })
-            );
+        let directory = password_store_dir.unwrap_or_else(|| {
+            env.get("PASSWORD_STORE_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    let home = Path::new(env.get("HOME").expect("$HOME must be set"));
+                    home.join(".password-store")
+                })
+        });
 
         let gpg_opts = env.remove("PASSWORD_STORE_GPG_OPTS");
 
@@ -255,7 +253,10 @@ impl PasswordStore {
     }
 
     /// make gpg-agent forget the cached password for the keys associated with the given collections
-    pub async fn gpg_forget_cached_password(&self, collection_dirs: HashSet<impl AsRef<Path>>) -> Result {
+    pub async fn gpg_forget_cached_password(
+        &self,
+        collection_dirs: HashSet<impl AsRef<Path>>,
+    ) -> Result {
         // all unique GPG key ids to clear cache for
         let mut gpg_ids = HashSet::new();
 
@@ -264,68 +265,89 @@ impl PasswordStore {
         }
 
         // get the keygrip for each key
-        let gpg_result = self.make_gpg_process()
+        let gpg_result = self
+            .make_gpg_process()
             .arg("--batch")
             .arg("--with-colons")
             .arg("--with-keygrip")
             .arg("--list-key")
             .args(gpg_ids)
-            .output().await?;
+            .output()
+            .await?;
 
         // return any errors that occurred
         if !gpg_result.status.success() {
-            return Err(Error::GpgError(String::from_utf8_lossy(&gpg_result.stderr).into_owned()));
+            return Err(Error::GpgError(
+                String::from_utf8_lossy(&gpg_result.stderr).into_owned(),
+            ));
         }
 
-        let gpg_out = String::from_utf8(gpg_result.stdout).expect("gpg colon output is valid UTF-8");
+        let gpg_out =
+            String::from_utf8(gpg_result.stdout).expect("gpg colon output is valid UTF-8");
 
-        let mut gpg_line_iter = gpg_out
-            .trim()
-            .lines()
-            .map(|line| line.split(':'));
+        let mut gpg_line_iter = gpg_out.trim().lines().map(|line| line.split(':'));
 
         loop {
             // find the (sub)key for encryption
-            if gpg_line_iter.position(|mut line| {
-                // Field 1: type (index 0)
-                let Some(key_type) = line.nth(0) else { return false; };
+            if gpg_line_iter
+                .position(|mut line| {
+                    // Field 1: type (index 0)
+                    let Some(key_type) = line.nth(0) else {
+                        return false;
+                    };
 
-                // public key or subkey
-                if key_type != "pub" && key_type != "sub" { return false; }
+                    // public key or subkey
+                    if key_type != "pub" && key_type != "sub" {
+                        return false;
+                    }
 
-                // Field 12: capabilities (index 11, 10 after type is consumed)
-                let Some(caps) = line.nth(10) else { return false; };
+                    // Field 12: capabilities (index 11, 10 after type is consumed)
+                    let Some(caps) = line.nth(10) else {
+                        return false;
+                    };
 
-                // pubkey or subkey that has the 'e' (encryption) capability
-                caps.contains('e')
-            }).is_none() {
+                    // pubkey or subkey that has the 'e' (encryption) capability
+                    caps.contains('e')
+                })
+                .is_none()
+            {
                 // no more keys with encryption capability found - break
                 break;
             }
 
             // look for the following keygrip
-            let Some(keygrip) = gpg_line_iter
-                .find_map(|mut line| {
-                    let Some(item_type) = line.nth(0) else { return None; };
+            let Some(keygrip) = gpg_line_iter.find_map(|mut line| {
+                let Some(item_type) = line.nth(0) else {
+                    return None;
+                };
 
-                    // keygrip
-                    if item_type != "grp" { return None; }
+                // keygrip
+                if item_type != "grp" {
+                    return None;
+                }
 
-                    // Field 10: keygrip (user id) (index 9, 8 after type is consumed)
-                    let Some(keygrip) = line.nth(8) else { return None; };
+                // Field 10: keygrip (user id) (index 9, 8 after type is consumed)
+                let Some(keygrip) = line.nth(8) else {
+                    return None;
+                };
 
-                    Some(keygrip)
-                }) else { return Err(Error::GpgError("no keygrip found".into())) };
+                Some(keygrip)
+            }) else {
+                return Err(Error::GpgError("no keygrip found".into()));
+            };
 
             // make gpg agent forget the passphrase for this key
             let gpg_agent_command = format!("clear_passphrase --mode=normal {}", keygrip);
             let gpg_agent_result = Command::new("gpg-connect-agent")
-                    .arg(gpg_agent_command)
-                    .arg("/bye")
-                    .output().await?;
+                .arg(gpg_agent_command)
+                .arg("/bye")
+                .output()
+                .await?;
 
             if !gpg_agent_result.status.success() {
-                return Err(Error::GpgError(String::from_utf8_lossy(&gpg_agent_result.stderr).into_owned()));
+                return Err(Error::GpgError(
+                    String::from_utf8_lossy(&gpg_agent_result.stderr).into_owned(),
+                ));
             }
         }
 
