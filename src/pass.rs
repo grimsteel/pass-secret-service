@@ -118,11 +118,15 @@ impl PasswordStore {
         }
     }
 
-    async fn get_gpg_id(&self, dir: impl AsRef<Path>) -> Result<String> {
+    /// Look for a `.gpg-id` file starting from `dir` up to `self.directory`.
+    ///
+    /// Some tools, like `gopass` may encrypt a file for multiple recipients and thus contain
+    /// multiple IDs in the `.gpg-id` file.
+    async fn get_gpg_ids(&self, dir: impl AsRef<Path>) -> Result<Vec<String>> {
         for component in dir.as_ref().ancestors() {
             let gpg_id_path = component.join(".gpg-id");
             match read_to_string(gpg_id_path).await {
-                Ok(value) => return Ok(value.trim().into()),
+                Ok(value) => return Ok(value.trim().lines().map(String::from).collect()),
                 // not found, continue
                 Err(ref e) if e.kind() == io::ErrorKind::NotFound => {}
                 Err(e) => Err(e)?,
@@ -154,13 +158,16 @@ impl PasswordStore {
 
         self.ensure_dirs(dir).await?;
 
-        let gpg_id = self.get_gpg_id(dir).await?;
+        let gpg_ids = self.get_gpg_ids(dir).await?;
 
         let mut process = self
             .make_gpg_process()
-            .arg("--recipient")
-            .arg(gpg_id)
             .arg("--encrypt")
+            .args(
+                gpg_ids
+                    .into_iter()
+                    .map(|recipient| format!("--recipient={recipient}")),
+            )
             .arg("-")
             .spawn()?;
 
@@ -261,7 +268,7 @@ impl PasswordStore {
         let mut gpg_ids = HashSet::new();
 
         for dir in collection_dirs {
-            gpg_ids.insert(self.get_gpg_id(self.directory.join(dir)).await?);
+            gpg_ids.extend(self.get_gpg_ids(self.directory.join(dir)).await?);
         }
 
         // get the keygrip for each key
