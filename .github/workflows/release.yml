@@ -7,17 +7,24 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
-      - uses: actions/checkout@v4
-        name: Checkout
-      - uses: dtolnay/rust-toolchain@stable
-        name: Setup rust
-      - run: cargo build --release
-        name: Build
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release
+      - name: Rename binary
+        run: |
+          mkdir -p dist
+          cp target/release/pass-secret-service dist/pass-secret-service-$(uname -m)
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/pass-secret-service
+          files: dist/pass-secret-service-*
