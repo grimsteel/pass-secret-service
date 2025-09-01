@@ -10,14 +10,24 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
     steps:
-      - uses: actions/checkout@v4
-        name: Checkout
-      - uses: dtolnay/rust-toolchain@stable
-        name: Setup rust
-      - run: cargo build --release
-        name: Build
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: |
+          cargo install cross
+          cross build --release --target ${{ matrix.target }}
+      - name: Rename binary
+        run: |
+          mkdir -p dist
+          arch=$(echo "${{ matrix.target }}" | cut -d'-' -f1)
+          cp target/${{ matrix.target }}/release/pass-secret-service dist/pass-secret-service-$arch
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/pass-secret-service
+          files: dist/pass-secret-service-*
