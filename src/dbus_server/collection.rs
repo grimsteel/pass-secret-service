@@ -1,4 +1,5 @@
 use std::{collections::HashMap, sync::Arc};
+use log::debug;
 
 use zbus::{
     fdo, interface,
@@ -44,8 +45,10 @@ impl Collection<'static> {
     async fn delete(
         &self,
         #[zbus(connection)] connection: &Connection,
+        #[zbus(header)] header: Header<'_>,
         #[zbus(object_server)] object_server: &ObjectServer,
     ) -> Result<ObjectPath> {
+        debug!("Deleting collection {} for {}", self.id, header.sender().map(|s| s.to_string()).unwrap_or_else(|| "[unknown ID]".into()));
         let secrets = self.store.list_secrets(&*self.id).await?;
 
         // remove this collection from the object server

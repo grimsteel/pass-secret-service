@@ -1,4 +1,5 @@
 use std::{collections::HashMap, sync::Arc};
+use log::debug;
 
 use zbus::{
     fdo, interface, message::Header, object_server::InterfaceDeref, zvariant::ObjectPath,
@@ -48,6 +49,8 @@ impl<'a> Item<'a> {
         header: &Header<'_>,
         session: &InterfaceDeref<'_, Session>,
     ) -> Result<Secret> {
+        debug!("Fetching secret {}/{} for {}", self.collection_id, self.id, header.sender().map(|s| s.to_string()).unwrap_or_else(|| "[unknown ID]".into()));
+
         let secret_value = self
             .store
             .read_secret(&*self.collection_id, &*self.id, true)
@@ -114,6 +117,8 @@ impl Item<'static> {
         #[zbus(header)] header: Header<'_>,
         #[zbus(object_server)] object_server: &ObjectServer,
     ) -> Result<()> {
+        debug!("Setting secret {}/{} from {}", self.collection_id, self.id, header.sender().map(|s| s.to_string()).unwrap_or_else(|| "[unknown ID]".into()));
+
         let secret_value =
             try_interface(object_server.interface::<_, Session>(&secret.session).await)?
                 .ok_or(Error::InvalidSession)?

@@ -14,4 +14,9 @@ pub struct CliArgs {
     /// print the current version
     #[argh(switch, short = 'V', long = "version")]
     pub print_version: bool,
+
+    /// log level (overridden by $RUST_LOG environment variable)
+    /// uses env_logger syntax
+    #[argh(option)]
+    pub log_level: Option<String>,
 }

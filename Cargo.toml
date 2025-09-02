@@ -7,9 +7,11 @@ edition = "2021"
 aes = "0.8.4"
 argh = "0.1.13"
 cbc = { version = "0.1.2", features = ["std"] }
+env_logger = "0.11.8"
 futures-util = "0.3.30"
 hkdf = { version = "0.12.4", features = ["std"] }
 libc = "0.2.155"
+log = "0.4.27"
 nanoid = "0.4.0"
 num = { version = "0.4.3", features = ["rand"] }
 rand = "0.8.5"

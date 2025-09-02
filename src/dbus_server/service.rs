@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+use log::debug;
 use nanoid::nanoid;
 use zbus::{
     fdo, interface,
@@ -129,6 +130,9 @@ impl Service<'static> {
         #[zbus(object_server)] object_server: &ObjectServer,
         #[zbus(connection)] connection: &Connection,
     ) -> fdo::Result<(Value, ObjectPath)> {
+        // print sender's unique name
+        debug!("Opening session for {} with algorithm {}", header.sender().map(|s| s.to_string()).unwrap_or_else(|| "[unknown ID]".into()), algorithm);
+
         let client_name = header.sender().unwrap().to_owned().into();
         let id = nanoid!(8, &NANOID_ALPHABET);
         let path = session_path(id).unwrap();
@@ -188,6 +192,8 @@ impl Service<'static> {
 
         let id = self.store.create_collection(label, alias.clone()).await?;
         let collection_path = collection_path(&id).unwrap();
+
+        debug!("Creating collection {id}");
 
         // if the collection here doesn't exist, create it and handle alises
         // the only reason it might exist is if they supplied an existing alias
@@ -264,6 +270,7 @@ impl Service<'static> {
                     },
                 );
             }
+            debug!("Locking collections [{}]", collection_dirs.iter().map(|s| s.to_string_lossy()).collect::<Vec<_>>().join(", "));
             self.store
                 .pass
                 .gpg_forget_cached_password(collection_dirs)
