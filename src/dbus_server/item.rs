@@ -7,15 +7,14 @@ use zbus::{
 };
 
 use crate::{
-    error::{Error, Result},
-    secret_store::SecretStore,
+    dbus_server::collection::Collection, error::{Error, Result}, secret_store::SecretStore
 };
 
 use super::{
     secret_transfer::Secret,
     session::Session,
     utils::{
-        collection_path, secret_alias_path, secret_path, time_to_int, try_interface, EMPTY_PATH,
+        secret_alias_path, secret_path, time_to_int, try_interface, EMPTY_PATH,
     },
 };
 
@@ -31,17 +30,8 @@ impl<'a> Item<'a> {
         secret_path(&*self.collection_id, &*self.id).unwrap()
     }
 
-    async fn broadcast_collection_signal(&self, connection: &Connection, name: &str) -> Result {
-        connection
-            .emit_signal(
-                Option::<String>::None,
-                collection_path(&*self.collection_id).unwrap(),
-                "org.freedesktop.Secret.Collection",
-                name,
-                &(self.path(),),
-            )
-            .await?;
-        Ok(())
+    async fn broadcast_collection_signal(&self, connection: &Connection, name: &str) -> Result {        
+        Collection::broadcast_collection_signal(&self.store, self.collection_id.clone(), connection, name, self.path()).await
     }
 
     pub async fn read_with_session(

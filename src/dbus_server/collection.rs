@@ -1,5 +1,5 @@
 use std::{collections::HashMap, sync::Arc};
-use log::debug;
+use log::{debug, trace};
 
 use zbus::{
     fdo, interface,
@@ -37,6 +37,60 @@ impl<'a> Collection<'a> {
             collection_id: self.id.clone(),
             store: self.store.clone(),
         }
+    }
+    
+    async fn broadcast_self_signal<'b>(&self, connection: &Connection, name: &str, data_path: ObjectPath<'b>) -> Result {
+        Self::broadcast_collection_signal(&self.store, self.id.clone(), connection, name, data_path).await
+    }
+    
+    /// emit signal on collection and all aliases
+    pub async fn broadcast_collection_signal<'b>(store: &SecretStore<'b>, collection_id: Arc<String>, connection: &Connection, name: &str, data_path: ObjectPath<'b>) -> Result {
+        let collection_path = collection_path(&collection_id).unwrap();
+        trace!("Broadcasting signal {} on {} and all aliases for {}", name, collection_path, data_path);
+        
+        let signal_data = (data_path,);
+        
+        // add to all aliases too
+        for alias in store
+            .list_aliases_for_collection(collection_id.clone())
+            .await?
+        {
+            if let Some(path) = alias_path(&alias) {
+                connection
+                    .emit_signal(
+                        Option::<String>::None,
+                        path,
+                        "org.freedesktop.Secret.Collection",
+                        name,
+                        &signal_data,
+                    )
+                    .await?;
+            }
+        }
+        
+        // main collection path
+        connection
+            .emit_signal(
+                Option::<String>::None,
+                &collection_path,
+                "org.freedesktop.Secret.Collection",
+                name,
+                &signal_data,
+            )
+            .await?;
+        
+        // service change
+        connection
+            .emit_signal(
+                Option::<String>::None,
+                "/org/freedesktop/secrets",
+                "org.freedesktop.Secret.Service",
+                "CollectionChanged",
+                &(collection_path,),
+            )
+            .await?;
+        
+        Ok(())
     }
 }
 
@@ -111,8 +165,8 @@ impl Collection<'static> {
         properties: HashMap<String, Value<'_>>,
         secret: Secret,
         replace: bool,
-        #[zbus(signal_context)] signal_context: SignalContext<'_>,
         #[zbus(object_server)] object_server: &ObjectServer,
+        #[zbus(connection)] connection: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> Result<(ObjectPath, ObjectPath)> {
         let secret_value =
@@ -150,7 +204,9 @@ impl Collection<'static> {
                 }
 
                 let path = secret_path(&*self.id, &*secret_id).unwrap();
-                Self::item_changed(&signal_context, path.clone()).await?;
+                
+                // fire signal
+                self.broadcast_self_signal(connection, "ItemChanged", path.clone()).await?;
 
                 // no need to add to the object server
                 return Ok((path, EMPTY_PATH));
@@ -180,8 +236,9 @@ impl Collection<'static> {
         }
         // add the item to the object server
         object_server.at(&path, item).await?;
-
-        Self::item_created(&signal_context, path.clone()).await?;
+        
+        // fire signal
+        self.broadcast_self_signal(connection, "ItemCreated", path.clone()).await?;
 
         // no prompt needed for GPG encryption
         Ok((path, EMPTY_PATH))
