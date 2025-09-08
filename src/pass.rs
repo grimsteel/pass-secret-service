@@ -182,6 +182,7 @@ impl PasswordStore {
             let mut file = OpenOptions::new()
                 .write(true)
                 .create(true)
+                .truncate(true)
                 .mode(self.file_mode)
                 .open(full_path)
                 .await?;
