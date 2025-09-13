@@ -871,7 +871,7 @@ checksum = "bb813b8af86854136c6922af0598d719255ecb2179515e6e7730d468f05c9cae"
 
 [[package]]
 name = "pass-secret-service"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "aes",
  "argh",
