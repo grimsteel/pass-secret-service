@@ -573,8 +573,12 @@ impl<'a> SecretStore<'a> for RedbSecretStore<'a> {
         attributes: Arc<HashMap<String, String>>,
     ) -> Result<String> {
         let collection_dir = Path::new(PASS_SUBDIR).join(&*collection_id);
-
-        let secret_id = nanoid!(8, &NANOID_ALPHABET);
+        
+        let secret_id = if let Some(label) = &label {
+            format!("{}_{}", slugify(&label), nanoid!(4, &NANOID_ALPHABET))
+        } else {
+            nanoid!(8, &NANOID_ALPHABET)
+        };
 
         let secret_path = collection_dir.join(&*secret_id);
 
