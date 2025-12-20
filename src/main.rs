@@ -13,7 +13,6 @@ mod cli;
 mod dbus_server;
 mod error;
 mod pass;
-mod redb_imps;
 mod secret_store;
 
 async fn run(args: CliArgs) -> Result {

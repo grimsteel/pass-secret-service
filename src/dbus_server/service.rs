@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+use dyn_clone::clone_box;
 use log::debug;
 use nanoid::nanoid;
 use zbus::{
@@ -18,7 +19,9 @@ use crate::{
     dbus_server::secret_transfer::{DhIetf1024Sha256Aes128CbcPkcs7Transfer, SessionTransfer},
     error::{Error, OptionNoneNotFound, Result},
     pass::PasswordStore,
-    secret_store::{slugify, SecretStore, NANOID_ALPHABET},
+    secret_store::{
+        get_collection_dir, redb::RedbSecretStore, slugify, SecretStore, NANOID_ALPHABET,
+    },
 };
 
 use super::{
@@ -34,7 +37,7 @@ use super::{
 
 #[derive(Debug)]
 pub struct Service<'a> {
-    store: SecretStore<'a>,
+    store: Box<dyn SecretStore<'a> + Send + Sync>,
     forget_password_on_lock: bool,
 }
 
@@ -44,7 +47,7 @@ impl Service<'static> {
         pass: &'static PasswordStore,
         forget_password_on_lock: bool,
     ) -> Result<Self> {
-        let store = SecretStore::new(pass).await?;
+        let store = Box::new(RedbSecretStore::new(pass).await?);
 
         {
             let object_server = connection.object_server();
@@ -115,7 +118,7 @@ impl Service<'static> {
     fn make_collection(&self, name: String) -> Collection<'static> {
         Collection {
             id: Arc::new(name),
-            store: self.store.clone(),
+            store: clone_box(self.store.as_ref()),
         }
     }
 }
@@ -123,15 +126,22 @@ impl Service<'static> {
 #[interface(name = "org.freedesktop.Secret.Service")]
 impl Service<'static> {
     async fn open_session(
-        &self,
+        &'_ self,
         algorithm: String,
         input: OwnedValue,
         #[zbus(header)] header: Header<'_>,
         #[zbus(object_server)] object_server: &ObjectServer,
         #[zbus(connection)] connection: &Connection,
-    ) -> fdo::Result<(Value, ObjectPath)> {
+    ) -> fdo::Result<(Value<'_>, ObjectPath<'_>)> {
         // print sender's unique name
-        debug!("Opening session for {} with algorithm {}", header.sender().map(|s| s.to_string()).unwrap_or_else(|| "[unknown ID]".into()), algorithm);
+        debug!(
+            "Opening session for {} with algorithm {}",
+            header
+                .sender()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "[unknown ID]".into()),
+            algorithm
+        );
 
         let client_name = header.sender().unwrap().to_owned().into();
         let id = nanoid!(8, &NANOID_ALPHABET);
@@ -174,12 +184,12 @@ impl Service<'static> {
     }
 
     async fn create_collection(
-        &self,
+        &'_ self,
         properties: HashMap<String, OwnedValue>,
         alias: String,
         #[zbus(signal_context)] signal: SignalContext<'_>,
         #[zbus(object_server)] object_server: &ObjectServer,
-    ) -> Result<(ObjectPath, ObjectPath)> {
+    ) -> Result<(ObjectPath<'_>, ObjectPath<'_>)> {
         // stringify the labelg
         let label: Option<String> = properties
             .get("org.freedesktop.Secret.Collection.Label")
@@ -224,9 +234,9 @@ impl Service<'static> {
     }
 
     async fn search_items(
-        &self,
+        &'_ self,
         attributes: HashMap<String, String>,
-    ) -> Result<(Vec<ObjectPath>, Vec<ObjectPath>)> {
+    ) -> Result<(Vec<ObjectPath<'_>>, Vec<ObjectPath<'_>>)> {
         let items = self.store.search_all_collections(attributes).await?;
         let paths = items
             .into_iter()
@@ -241,10 +251,10 @@ impl Service<'static> {
     }
 
     async fn lock(
-        &self,
+        &'_ self,
         objects: Vec<OwnedObjectPath>,
         #[zbus(object_server)] object_server: &ObjectServer,
-    ) -> Result<(Vec<ObjectPath>, ObjectPath)> {
+    ) -> Result<(Vec<ObjectPath<'_>>, ObjectPath<'_>)> {
         if self.forget_password_on_lock {
             // all parent collection directories for the items given
             let mut collection_dirs = HashSet::<PathBuf>::new();
@@ -254,7 +264,7 @@ impl Service<'static> {
                     match try_interface(object_server.interface::<_, Item>(&object_path).await)? {
                         Some(item) => {
                             // this object is an item
-                            SecretStore::get_collection_dir(&*item.get().await.collection_id)
+                            get_collection_dir(&*item.get().await.collection_id)
                         }
                         None => {
                             // this might be a collection
@@ -262,17 +272,23 @@ impl Service<'static> {
                                 object_server.interface::<_, Collection>(&object_path).await,
                             )?
                             .into_not_found()?;
-                            let collection_dir =
-                                SecretStore::get_collection_dir(&*collection.get().await.id);
+                            let collection_dir = get_collection_dir(&*collection.get().await.id);
                             // this is just to satisfy the borrow checker
                             collection_dir
                         }
                     },
                 );
             }
-            debug!("Locking collections [{}]", collection_dirs.iter().map(|s| s.to_string_lossy()).collect::<Vec<_>>().join(", "));
+            debug!(
+                "Locking collections [{}]",
+                collection_dirs
+                    .iter()
+                    .map(|s| s.to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
             self.store
-                .pass
+                .get_pass()
                 .gpg_forget_cached_password(collection_dirs)
                 .await?;
         };
@@ -281,7 +297,7 @@ impl Service<'static> {
         Ok((vec![], EMPTY_PATH))
     }
 
-    async fn unlock(&self, objects: Vec<OwnedObjectPath>) -> (Vec<OwnedObjectPath>, ObjectPath) {
+    async fn unlock(&'_ self, objects: Vec<OwnedObjectPath>) -> (Vec<OwnedObjectPath>, ObjectPath<'_>) {
         // we don't support locking - just say all of them were unlocked
         (objects, EMPTY_PATH)
     }
@@ -313,7 +329,7 @@ impl Service<'static> {
         Ok(results)
     }
 
-    async fn read_alias(&self, name: String) -> Result<ObjectPath> {
+    async fn read_alias(&'_ self, name: String) -> Result<ObjectPath<'_>> {
         let alias = slugify(&name);
 
         if let Some(target) = collection_path(self.store.get_alias(Arc::new(alias)).await?) {
@@ -386,7 +402,7 @@ impl Service<'static> {
     }
 
     #[zbus(property)]
-    async fn collections(&self) -> Vec<ObjectPath> {
+    async fn collections(&'_ self) -> Vec<ObjectPath<'_>> {
         self.store
             .collections()
             .await

@@ -6,7 +6,9 @@ edition = "2021"
 [dependencies]
 aes = "0.8.4"
 argh = "0.1.13"
+async-trait = "0.1.89"
 cbc = { version = "0.1.2", features = ["std"] }
+dyn-clone = "1.0.20"
 env_logger = "0.11.8"
 futures-util = "0.3.30"
 hkdf = { version = "0.12.4", features = ["std"] }
@@ -17,6 +19,7 @@ num = { version = "0.4.3", features = ["rand"] }
 rand = "0.8.5"
 redb = "2.1.1"
 serde = "1.0.204"
+serde_json = "1.0.145"
 sha2 = "0.10.9"
 thiserror = "2.0.12"
 tokio = { version = "1.38.1", features = ["fs", "rt", "rt-multi-thread", "macros", "process"] }

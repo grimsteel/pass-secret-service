@@ -1,5 +1,6 @@
-use std::{collections::HashMap, sync::Arc};
+use dyn_clone::clone_box;
 use log::{debug, trace};
+use std::{collections::HashMap, sync::Arc};
 
 use zbus::{
     fdo, interface,
@@ -26,7 +27,7 @@ use super::{
 
 #[derive(Clone, Debug)]
 pub struct Collection<'a> {
-    pub store: SecretStore<'a>,
+    pub store: Box<dyn SecretStore<'a> + Send + Sync>,
     pub id: Arc<String>,
 }
 
@@ -35,21 +36,44 @@ impl<'a> Collection<'a> {
         Item {
             id: Arc::new(id),
             collection_id: self.id.clone(),
-            store: self.store.clone(),
+            store: clone_box(self.store.as_ref()),
         }
     }
-    
-    async fn broadcast_self_signal<'b>(&self, connection: &Connection, name: &str, data_path: ObjectPath<'b>) -> Result {
-        Self::broadcast_collection_signal(&self.store, self.id.clone(), connection, name, data_path).await
+
+    async fn broadcast_self_signal<'b: 'a>(
+        &self,
+        connection: &Connection,
+        name: &str,
+        data_path: ObjectPath<'b>,
+    ) -> Result {
+        Self::broadcast_collection_signal(
+            self.store.as_ref(),
+            self.id.clone(),
+            connection,
+            name,
+            data_path,
+        )
+        .await
     }
-    
+
     /// emit signal on collection and all aliases
-    pub async fn broadcast_collection_signal<'b>(store: &SecretStore<'b>, collection_id: Arc<String>, connection: &Connection, name: &str, data_path: ObjectPath<'b>) -> Result {
+    pub async fn broadcast_collection_signal<'b, 'c>(
+        store: &(dyn SecretStore<'c> + Send + Sync),
+        collection_id: Arc<String>,
+        connection: &Connection,
+        name: &str,
+        data_path: ObjectPath<'b>,
+    ) -> Result {
         let collection_path = collection_path(&collection_id).unwrap();
-        trace!("Broadcasting signal {} on {} and all aliases for {}", name, collection_path, data_path);
-        
+        trace!(
+            "Broadcasting signal {} on {} and all aliases for {}",
+            name,
+            collection_path,
+            data_path
+        );
+
         let signal_data = (data_path,);
-        
+
         // add to all aliases too
         for alias in store
             .list_aliases_for_collection(collection_id.clone())
@@ -67,7 +91,7 @@ impl<'a> Collection<'a> {
                     .await?;
             }
         }
-        
+
         // main collection path
         connection
             .emit_signal(
@@ -78,7 +102,7 @@ impl<'a> Collection<'a> {
                 &signal_data,
             )
             .await?;
-        
+
         // service change
         connection
             .emit_signal(
@@ -89,7 +113,7 @@ impl<'a> Collection<'a> {
                 &(collection_path,),
             )
             .await?;
-        
+
         Ok(())
     }
 }
@@ -97,12 +121,19 @@ impl<'a> Collection<'a> {
 #[interface(name = "org.freedesktop.Secret.Collection")]
 impl Collection<'static> {
     async fn delete(
-        &self,
+        &'_ self,
         #[zbus(connection)] connection: &Connection,
         #[zbus(header)] header: Header<'_>,
         #[zbus(object_server)] object_server: &ObjectServer,
-    ) -> Result<ObjectPath> {
-        debug!("Deleting collection {} for {}", self.id, header.sender().map(|s| s.to_string()).unwrap_or_else(|| "[unknown ID]".into()));
+    ) -> Result<ObjectPath<'_>> {
+        debug!(
+            "Deleting collection {} for {}",
+            self.id,
+            header
+                .sender()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "[unknown ID]".into())
+        );
         let secrets = self.store.list_secrets(&*self.id).await?;
 
         // remove this collection from the object server
@@ -147,7 +178,7 @@ impl Collection<'static> {
         Ok(EMPTY_PATH)
     }
 
-    async fn search_items(&self, attributes: HashMap<String, String>) -> Result<Vec<ObjectPath>> {
+    async fn search_items(&'_ self, attributes: HashMap<String, String>) -> Result<Vec<ObjectPath<'_>>> {
         let items = self
             .store
             .search_collection(self.id.clone(), Arc::new(attributes))
@@ -161,14 +192,14 @@ impl Collection<'static> {
     }
 
     async fn create_item(
-        &self,
+        &'_ self,
         properties: HashMap<String, Value<'_>>,
         secret: Secret,
         replace: bool,
         #[zbus(object_server)] object_server: &ObjectServer,
         #[zbus(connection)] connection: &Connection,
         #[zbus(header)] header: Header<'_>,
-    ) -> Result<(ObjectPath, ObjectPath)> {
+    ) -> Result<(ObjectPath<'_>, ObjectPath<'_>)> {
         let secret_value =
             try_interface(object_server.interface::<_, Session>(&secret.session).await)?
                 .ok_or(Error::InvalidSession)?
@@ -204,9 +235,10 @@ impl Collection<'static> {
                 }
 
                 let path = secret_path(&*self.id, &*secret_id).unwrap();
-                
+
                 // fire signal
-                self.broadcast_self_signal(connection, "ItemChanged", path.clone()).await?;
+                self.broadcast_self_signal(connection, "ItemChanged", path.clone())
+                    .await?;
 
                 // no need to add to the object server
                 return Ok((path, EMPTY_PATH));
@@ -236,16 +268,17 @@ impl Collection<'static> {
         }
         // add the item to the object server
         object_server.at(&path, item).await?;
-        
+
         // fire signal
-        self.broadcast_self_signal(connection, "ItemCreated", path.clone()).await?;
+        self.broadcast_self_signal(connection, "ItemCreated", path.clone())
+            .await?;
 
         // no prompt needed for GPG encryption
         Ok((path, EMPTY_PATH))
     }
 
     #[zbus(property)]
-    async fn items(&self) -> fdo::Result<Vec<ObjectPath>> {
+    async fn items(&'_ self) -> fdo::Result<Vec<ObjectPath<'_>>> {
         Ok(self
             .store
             .list_secrets(&*self.id)

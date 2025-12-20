@@ -1,13 +1,6 @@
-use std::{
-    borrow::Cow,
-    collections::HashMap,
-    fmt::Debug,
-    fs::Metadata,
-    io,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{borrow::Cow, collections::HashMap, fmt::Debug, fs::Metadata, io, path::Path, sync::Arc};
 
+use async_trait::async_trait;
 use nanoid::nanoid;
 use redb::{
     Database, MultimapTableDefinition, ReadableMultimapTable, ReadableTable, TableDefinition,
@@ -17,7 +10,7 @@ use tokio::{sync::RwLock, task::spawn_blocking};
 use crate::{
     error::{raise_nonexistent_table, IntoResult, OptionNoneNotFound, Result},
     pass::PasswordStore,
-    redb_imps::RedbHashMap,
+    secret_store::{redb_imps::RedbHashMap, slugify, SecretStore, NANOID_ALPHABET, PASS_SUBDIR},
 };
 
 // Collection tables
@@ -36,15 +29,7 @@ const ALIASES_TABLE: TableDefinition<&str, &str> = TableDefinition::new("aliases
 const ALIASES_TABLE_REVERSE: MultimapTableDefinition<&str, &str> =
     MultimapTableDefinition::new("aliases_reverse");
 
-const PASS_SUBDIR: &'static str = "secret-service";
 const ATTRIBUTES_DB: &'static str = "attributes.redb";
-
-pub const NANOID_ALPHABET: [char; 63] = [
-    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's',
-    't', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L',
-    'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '0', '1', '2', '3', '4',
-    '5', '6', '7', '8', '9', '_',
-];
 
 type RedbResult<T> = std::result::Result<T, redb::Error>;
 /// open a db contained within the given PasswordStore
@@ -53,30 +38,6 @@ async fn open_db(pass: &PasswordStore, path: impl AsRef<Path>) -> Result<Databas
     Ok(redb::Builder::new()
         .create_file(db_file)
         .map_err(|e| Into::<redb::Error>::into(e))?)
-}
-
-/// convert a string to a valid ASCII slug
-pub fn slugify(string: &str) -> String {
-    let mut slugified = Vec::<u8>::with_capacity(string.len());
-
-    // no two underscores in row
-    let mut after_underscore = true;
-
-    for ch in string.chars() {
-        if ch.is_ascii_alphanumeric() {
-            after_underscore = false;
-            slugified.push(ch.to_ascii_lowercase() as u8);
-        } else if !after_underscore {
-            // add an underscore for all other chars
-            after_underscore = true;
-            slugified.push(b'_')
-        }
-    }
-
-    slugified.shrink_to_fit();
-
-    // Safety: all chars pushed to the vec are ASCII
-    unsafe { String::from_utf8_unchecked(slugified) }
 }
 
 /// search a collection for the given attributes
@@ -127,27 +88,13 @@ pub fn search_collection(attrs: &HashMap<String, String>, db: &Database) -> Resu
 }
 
 #[derive(Debug, Clone)]
-pub struct SecretStore<'a> {
+pub struct RedbSecretStore<'a> {
     pub pass: &'a PasswordStore,
     collection_dbs: Arc<RwLock<HashMap<String, Database>>>,
     db: Arc<Database>,
 }
 
-impl<'a> SecretStore<'a> {
-    pub async fn new(pass: &'a PasswordStore) -> Result<Self> {
-        let collections = Self::get_current_collections(pass).await?;
-
-        let db = open_db(&pass, &format!("{PASS_SUBDIR}/collections.redb")).await?;
-
-        let store = Self {
-            pass,
-            collection_dbs: Arc::new(RwLock::new(collections)),
-            db: Arc::new(db),
-        };
-
-        Ok(store)
-    }
-
+impl<'a> RedbSecretStore<'a> {
     async fn get_current_collections(pass: &PasswordStore) -> Result<HashMap<String, Database>> {
         let mut collections = HashMap::new();
 
@@ -165,8 +112,29 @@ impl<'a> SecretStore<'a> {
 
         Ok(collections)
     }
+}
 
-    pub async fn get_label(&self, collection_id: Arc<String>) -> Result<String> {
+#[async_trait]
+impl<'a> SecretStore<'a> for RedbSecretStore<'a> {
+    async fn new(pass: &'a PasswordStore) -> Result<Self> {
+        let collections = Self::get_current_collections(pass).await?;
+
+        let db = open_db(&pass, &format!("{PASS_SUBDIR}/collections.redb")).await?;
+
+        let store = Self {
+            pass,
+            collection_dbs: Arc::new(RwLock::new(collections)),
+            db: Arc::new(db),
+        };
+
+        Ok(store)
+    }
+
+    fn get_pass(&self) -> &'a PasswordStore {
+        self.pass
+    }
+
+    async fn get_label(&self, collection_id: Arc<String>) -> Result<String> {
         let db = self.db.clone();
         spawn_blocking(move || {
             let tx = db.begin_read().into_result()?;
@@ -182,7 +150,7 @@ impl<'a> SecretStore<'a> {
         .unwrap()
     }
 
-    pub async fn set_label(&self, collection_id: Arc<String>, label: String) -> Result {
+    async fn set_label(&self, collection_id: Arc<String>, label: String) -> Result {
         let db = self.db.clone();
         Ok(spawn_blocking(move || -> RedbResult<_> {
             let tx = db.begin_write()?;
@@ -197,7 +165,7 @@ impl<'a> SecretStore<'a> {
     }
 
     /// returns a hashmap of collection id to vec of aliases
-    pub async fn list_all_aliases(&self) -> Result<HashMap<String, Vec<String>>> {
+    async fn list_all_aliases(&self) -> Result<HashMap<String, Vec<String>>> {
         let db = self.db.clone();
         Ok(spawn_blocking(move || -> Result<_> {
             // open the aliases table
@@ -223,10 +191,7 @@ impl<'a> SecretStore<'a> {
     }
 
     /// list the aliases that point to a collection
-    pub async fn list_aliases_for_collection(
-        &self,
-        collection_id: Arc<String>,
-    ) -> Result<Vec<String>> {
+    async fn list_aliases_for_collection(&self, collection_id: Arc<String>) -> Result<Vec<String>> {
         let db = self.db.clone();
         spawn_blocking(move || -> Result<_> {
             let tx = db.begin_read().into_result()?;
@@ -245,7 +210,7 @@ impl<'a> SecretStore<'a> {
         .unwrap()
     }
 
-    pub async fn get_alias(&self, alias: Arc<String>) -> Result<String> {
+    async fn get_alias(&self, alias: Arc<String>) -> Result<String> {
         let db = self.db.clone();
         spawn_blocking(move || {
             // open the aliases table
@@ -263,7 +228,7 @@ impl<'a> SecretStore<'a> {
         .unwrap()
     }
 
-    pub async fn set_alias(&self, alias: Arc<String>, target: Option<String>) -> Result {
+    async fn set_alias(&self, alias: Arc<String>, target: Option<String>) -> Result {
         let db = self.db.clone();
         Ok(spawn_blocking(move || -> RedbResult<_> {
             // open the aliases table
@@ -292,7 +257,7 @@ impl<'a> SecretStore<'a> {
         .unwrap()?)
     }
 
-    pub async fn collections(&self) -> Vec<String> {
+    async fn collections(&self) -> Vec<String> {
         self.collection_dbs
             .read()
             .await
@@ -304,7 +269,7 @@ impl<'a> SecretStore<'a> {
     /// create a collection, with an optional label and alias
     /// returns the created collection name
     /// if `label` is `None`, the collection will be called "Untitled Collection"
-    pub async fn create_collection(
+    async fn create_collection(
         &self,
         label: Option<String>,
         alias: Option<String>,
@@ -397,7 +362,7 @@ impl<'a> SecretStore<'a> {
     }
 
     /// delete a collection and all its secrets
-    pub async fn delete_collection(&self, collection_id: Arc<String>) -> Result {
+    async fn delete_collection(&self, collection_id: Arc<String>) -> Result {
         // remove it from the collection db map
         self.collection_dbs.write().await.remove(&*collection_id);
         // remove the dir
@@ -438,7 +403,7 @@ impl<'a> SecretStore<'a> {
 
     /// search all collections for secrets matching the given attributes
     /// returns a map of collection id to items
-    pub async fn search_all_collections(
+    async fn search_all_collections(
         &self,
         attributes: HashMap<String, String>,
     ) -> Result<HashMap<String, Vec<String>>> {
@@ -457,7 +422,7 @@ impl<'a> SecretStore<'a> {
     }
 
     /// search the specific collection for secrets matching the given attributes
-    pub async fn search_collection(
+    async fn search_collection(
         &self,
         collection_id: Arc<String>,
         attributes: Arc<HashMap<String, String>>,
@@ -473,7 +438,7 @@ impl<'a> SecretStore<'a> {
     }
 
     /// get the filesystem metadata for this collection
-    pub async fn stat_collection(&self, collection_id: &str) -> Result<Metadata> {
+    async fn stat_collection(&self, collection_id: &str) -> Result<Metadata> {
         // just use the attributes db file rather than actually calculating the last modified date
         let collection_path = Path::new(PASS_SUBDIR)
             .join(&collection_id)
@@ -481,12 +446,7 @@ impl<'a> SecretStore<'a> {
         Ok(self.pass.stat_file(collection_path).await?)
     }
 
-    /// get the directory for the given collection id
-    pub fn get_collection_dir(collection_id: &str) -> PathBuf {
-        Path::new(PASS_SUBDIR).join(collection_id)
-    }
-
-    pub async fn list_secrets(&self, collection_id: &str) -> Result<Vec<String>> {
+    async fn list_secrets(&self, collection_id: &str) -> Result<Vec<String>> {
         let collection_path = Path::new(PASS_SUBDIR).join(&collection_id);
 
         Ok(self
@@ -508,7 +468,7 @@ impl<'a> SecretStore<'a> {
 
     /// decrypt a secret stored in the given collection with the given id
     /// if can_prompt is true, a gpg prompt may show
-    pub async fn read_secret(
+    async fn read_secret(
         &self,
         collection_id: &str,
         secret_id: &str,
@@ -520,7 +480,7 @@ impl<'a> SecretStore<'a> {
     }
 
     /// read the attributes for the given secret
-    pub async fn read_secret_attrs(
+    async fn read_secret_attrs(
         &self,
         collection_id: Arc<String>,
         secret_id: Arc<String>,
@@ -551,11 +511,7 @@ impl<'a> SecretStore<'a> {
     }
 
     /// remove a secret and its attributes
-    pub async fn delete_secret(
-        &self,
-        collection_id: Arc<String>,
-        secret_id: Arc<String>,
-    ) -> Result {
+    async fn delete_secret(&self, collection_id: Arc<String>, secret_id: Arc<String>) -> Result {
         let secret_path = Path::new(PASS_SUBDIR)
             .join(&*collection_id)
             .join(&*secret_id);
@@ -599,7 +555,7 @@ impl<'a> SecretStore<'a> {
         Ok(())
     }
 
-    pub async fn stat_secret(&self, collection_id: &str, secret_id: &str) -> Result<Metadata> {
+    async fn stat_secret(&self, collection_id: &str, secret_id: &str) -> Result<Metadata> {
         let secret_path = Path::new(PASS_SUBDIR)
             .join(&*collection_id)
             .join(&format!("{secret_id}.gpg"));
@@ -609,7 +565,7 @@ impl<'a> SecretStore<'a> {
 
     /// creates a new secret in a collection with the given label, attributes, and value
     /// returns the secret ID
-    pub async fn create_secret(
+    async fn create_secret(
         &self,
         collection_id: Arc<String>,
         label: Option<String>,
@@ -672,7 +628,7 @@ impl<'a> SecretStore<'a> {
         .unwrap()
     }
 
-    pub async fn set_secret(&self, collection_id: &str, secret_id: &str, value: Vec<u8>) -> Result {
+    async fn set_secret(&self, collection_id: &str, secret_id: &str, value: Vec<u8>) -> Result {
         let collection_dir = Path::new(PASS_SUBDIR).join(&*collection_id);
 
         let secret_path = collection_dir.join(&*secret_id);
@@ -683,7 +639,7 @@ impl<'a> SecretStore<'a> {
         Ok(())
     }
 
-    pub async fn set_secret_label(
+    async fn set_secret_label(
         &self,
         collection_id: Arc<String>,
         secret_id: Arc<String>,
@@ -713,7 +669,7 @@ impl<'a> SecretStore<'a> {
         .unwrap()
     }
 
-    pub async fn get_secret_label(
+    async fn get_secret_label(
         &self,
         collection_id: Arc<String>,
         secret_id: Arc<String>,
@@ -742,7 +698,7 @@ impl<'a> SecretStore<'a> {
     }
 
     /// read the attributes for the given secret
-    pub async fn set_secret_attrs(
+    async fn set_secret_attrs(
         &self,
         collection_id: Arc<String>,
         secret_id: Arc<String>,

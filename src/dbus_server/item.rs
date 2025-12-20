@@ -1,5 +1,5 @@
-use std::{collections::HashMap, sync::Arc};
 use log::debug;
+use std::{collections::HashMap, sync::Arc};
 
 use zbus::{
     fdo, interface, message::Header, object_server::InterfaceDeref, zvariant::ObjectPath,
@@ -7,31 +7,38 @@ use zbus::{
 };
 
 use crate::{
-    dbus_server::collection::Collection, error::{Error, Result}, secret_store::SecretStore
+    dbus_server::collection::Collection,
+    error::{Error, Result},
+    secret_store::SecretStore,
 };
 
 use super::{
     secret_transfer::Secret,
     session::Session,
-    utils::{
-        secret_alias_path, secret_path, time_to_int, try_interface, EMPTY_PATH,
-    },
+    utils::{secret_alias_path, secret_path, time_to_int, try_interface, EMPTY_PATH},
 };
 
 #[derive(Clone, Debug)]
 pub struct Item<'a> {
     pub collection_id: Arc<String>,
     pub id: Arc<String>,
-    pub store: SecretStore<'a>,
+    pub store: Box<dyn SecretStore<'a> + Send + Sync>,
 }
 
 impl<'a> Item<'a> {
-    fn path(&self) -> ObjectPath {
+    fn path(&'_ self) -> ObjectPath<'_> {
         secret_path(&*self.collection_id, &*self.id).unwrap()
     }
 
-    async fn broadcast_collection_signal(&self, connection: &Connection, name: &str) -> Result {        
-        Collection::broadcast_collection_signal(&self.store, self.collection_id.clone(), connection, name, self.path()).await
+    async fn broadcast_collection_signal(&self, connection: &Connection, name: &str) -> Result {
+        Collection::broadcast_collection_signal(
+            self.store.as_ref(),
+            self.collection_id.clone(),
+            connection,
+            name,
+            self.path(),
+        )
+        .await
     }
 
     pub async fn read_with_session(
@@ -39,7 +46,15 @@ impl<'a> Item<'a> {
         header: &Header<'_>,
         session: &InterfaceDeref<'_, Session>,
     ) -> Result<Secret> {
-        debug!("Fetching secret {}/{} for {}", self.collection_id, self.id, header.sender().map(|s| s.to_string()).unwrap_or_else(|| "[unknown ID]".into()));
+        debug!(
+            "Fetching secret {}/{} for {}",
+            self.collection_id,
+            self.id,
+            header
+                .sender()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "[unknown ID]".into())
+        );
 
         let secret_value = self
             .store
@@ -53,10 +68,10 @@ impl<'a> Item<'a> {
 #[interface(name = "org.freedesktop.Secret.Item")]
 impl Item<'static> {
     async fn delete(
-        &self,
+        &'_ self,
         #[zbus(connection)] connection: &Connection,
         #[zbus(object_server)] object_server: &ObjectServer,
-    ) -> Result<ObjectPath> {
+    ) -> Result<ObjectPath<'_>> {
         // delete from the stoer
         self.store
             .delete_secret(self.collection_id.clone(), self.id.clone())
@@ -107,7 +122,15 @@ impl Item<'static> {
         #[zbus(header)] header: Header<'_>,
         #[zbus(object_server)] object_server: &ObjectServer,
     ) -> Result<()> {
-        debug!("Setting secret {}/{} from {}", self.collection_id, self.id, header.sender().map(|s| s.to_string()).unwrap_or_else(|| "[unknown ID]".into()));
+        debug!(
+            "Setting secret {}/{} from {}",
+            self.collection_id,
+            self.id,
+            header
+                .sender()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "[unknown ID]".into())
+        );
 
         let secret_value =
             try_interface(object_server.interface::<_, Session>(&secret.session).await)?
