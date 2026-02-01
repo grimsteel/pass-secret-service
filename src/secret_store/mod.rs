@@ -13,7 +13,7 @@ use crate::{error::Result, pass::PasswordStore};
 
 pub mod redb;
 mod redb_imps;
-//mod json;
+mod json;
 
 pub const PASS_SUBDIR: &'static str = "secret-service";
 

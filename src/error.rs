@@ -15,6 +15,8 @@ pub enum Error {
     DbusError(#[from] zbus::Error),
     #[error("ReDB Error: {0}")]
     RedbError(#[from] redb::Error),
+    #[error("Serde serialization error: {0}")]
+    SerdeError(#[from] serde_json::Error),
     #[error("Secret encryption error: {0}")]
     EncryptionError(&'static str),
     #[error("GPG Error: {0}")]
@@ -49,6 +51,7 @@ impl DBusError for Error {
             Error::IoError(_) => "org.freedesktop.DBus.Error.IOError",
             Error::DbusError(_) => "org.freedesktop.zbus.Error",
             Error::RedbError(_) => "me.grimsteel.PassSecretService.ReDBError",
+            Error::SerdeError(_) => "me.grimsteel.PassSecretService.SerdeError",
             Error::GpgError(_) => "me.grimsteel.PassSecretService.GPGError",
             Error::EncryptionError(_) => "me.grimsteel.PassSecretService.EncryptionError",
             Error::NotInitialized => "me.grimsteel.PassSecretService.PassNotInitialized",

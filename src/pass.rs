@@ -59,17 +59,17 @@ impl PasswordStore {
             file_mode,
         })
     }
-
-    fn get_full_secret_path(&self, path: impl AsRef<Path>) -> PathBuf {
+    
+    pub fn get_full_filepath(&self, path: impl AsRef<Path>, extension: &str) -> PathBuf {
         let mut path = self.directory.join(path);
-
-        // add .gpg to the end if necessary
-        if !path.ends_with(".gpg") {
-            let os_str = path.as_mut_os_string();
-            os_str.push(".gpg");
-        };
+        if path.extension().and_then(|s| s.to_str()).is_none_or(|s| s != extension) {
+            path.add_extension(extension);
+        }
 
         path
+    }
+    fn get_full_secret_path(&self, path: impl AsRef<Path>) -> PathBuf {
+        self.get_full_filepath(path, "gpg")
     }
 
     fn make_gpg_process(&self) -> Command {
