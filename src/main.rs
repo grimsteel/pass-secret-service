@@ -3,6 +3,7 @@ use std::process::ExitCode;
 use cli::CliArgs;
 use dbus_server::service::Service;
 use env_logger::Env;
+use jiff::{SignedDuration, Timestamp, Zoned, fmt::{friendly::SpanPrinter, rfc2822}, tz::TimeZone};
 use log::{debug, error, info};
 use pass::PasswordStore;
 use zbus::{Connection, zvariant::Optional};
@@ -94,10 +95,14 @@ async fn run(args: CliArgs) -> Result {
                 None => {
                     info!("No programs have accessed {secret_path} since the service started.")
                 },
-                Some(SecretAccessor { uid, pid, process_name, .. }) => {
-                    info!("Last access of {secret_path}:");
-                    info!("User: {uid}");
-                    info!("Program: {} (PID {pid})", process_name.as_ref().map(|s| &s[..]).unwrap_or_else(|| "<unknown>"));
+                Some(SecretAccessor { uid, pid, process_name, timestamp, .. }) => {
+                    // create a zoned struct for formatting
+                    let orig = Zoned::new(Timestamp::from_millisecond(timestamp).unwrap(), TimeZone::system());
+                    let diff = SignedDuration::from_millis(timestamp - Timestamp::now().as_millisecond());
+                    info!("The last access of {secret_path} was {}:", SpanPrinter::new().duration_to_string(&diff));
+                    info!("  User: {uid}");
+                    info!("  Program: {} (PID {pid})", process_name.as_ref().map(|s| &s[..]).unwrap_or_else(|| "<unknown>"));
+                    info!("  Timestamp: {}", rfc2822::to_string(&orig).unwrap());
                 }
             };            
             

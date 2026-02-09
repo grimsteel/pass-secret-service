@@ -1,3 +1,4 @@
+use jiff::Timestamp;
 use log::debug;
 use serde::{Deserialize, Serialize};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
@@ -27,8 +28,9 @@ pub struct SecretAccessor<'a> {
     pub dbus_name: Optional<UniqueName<'a>>,
     pub uid: u32,
     pub pid: u32,
-    pub process_name: Optional<String>
-    // TODO: add timestamp
+    pub process_name: Optional<String>,
+    // ms since epoch
+    pub timestamp: i64
 }
 
 impl<'a> Default for SecretAccessor<'a> {
@@ -37,6 +39,7 @@ impl<'a> Default for SecretAccessor<'a> {
             dbus_name: Optional::from(None),
             uid: 0,
             pid: 0,
+            timestamp: 0,
             process_name: Optional::from(None)
         }
     }
@@ -73,6 +76,7 @@ impl SecretAccessor<'static> {
             uid,
             pid,
             dbus_name: Optional::from(Some(name)),
+            timestamp: Timestamp::now().as_millisecond(),
             process_name
         })
     }
