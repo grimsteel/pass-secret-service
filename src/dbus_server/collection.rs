@@ -37,6 +37,7 @@ impl<'a> Collection<'a> {
             id: Arc::new(id),
             collection_id: self.id.clone(),
             store: clone_box(self.store.as_ref()),
+            last_access: Default::default()
         }
     }
 

@@ -77,6 +77,7 @@ impl Service<'static> {
                         store: store.clone(),
                         id: Arc::new(id),
                         collection_id: collection_id.clone(),
+                        last_access: Default::default()
                     })
                     .collect();
 
@@ -308,6 +309,7 @@ impl Service<'static> {
         session: ObjectPath<'_>,
         #[zbus(object_server)] object_server: &ObjectServer,
         #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection
     ) -> Result<HashMap<OwnedObjectPath, Secret>> {
         let session_ref = try_interface(object_server.interface::<_, Session>(&session).await)?
             .ok_or(Error::InvalidSession)?;
@@ -321,7 +323,7 @@ impl Service<'static> {
             let secret = item_ref
                 .get()
                 .await
-                .read_with_session(&header, &session)
+                .read_with_session(&header, &session, connection)
                 .await?;
             results.insert(item_path.into(), secret);
         }
