@@ -20,7 +20,7 @@ use super::{
     utils::{secret_alias_path, secret_path, time_to_int, try_interface, EMPTY_PATH},
 };
 
-#[derive(Type, Clone, Debug, Serialize, Deserialize)]
+#[derive(Type, Clone, Debug, Serialize, Deserialize, PartialEq)]
 /// Holds information about the last process to access (decrypt) an item
 pub struct SecretAccessor<'a> {
     #[serde(borrow)]
@@ -28,6 +28,7 @@ pub struct SecretAccessor<'a> {
     pub uid: u32,
     pub pid: u32,
     pub process_name: Optional<String>
+    // TODO: add timestamp
 }
 
 impl<'a> Default for SecretAccessor<'a> {
@@ -139,8 +140,8 @@ impl Item<'static> {
     /// Custom method for accessor info.
     /// It would probably be more spec-compliant to define a custom interface
     /// for this method but that would require a new struct with zbus.
-    async fn last_access(&'_ self) -> Result<Optional<SecretAccessor<'_>>> {
-        Ok(Optional::from(self.last_access.read().await.clone()))
+    async fn last_access(&'_ self) -> Optional<SecretAccessor<'_>> {
+        Optional::from(self.last_access.read().await.clone())
     }
     
     async fn delete(
