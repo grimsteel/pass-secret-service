@@ -35,6 +35,9 @@ use super::{
     },
 };
 
+/// Default name of the initially created collection and alias
+pub const DEFAULT_COLLECTION_NAME: &'static str = "default";
+
 #[derive(Debug)]
 pub struct Service<'a> {
     store: Box<dyn SecretStore<'a> + Send + Sync>,
@@ -55,11 +58,11 @@ impl Service<'static> {
             let mut aliases = store.list_all_aliases().await?;
 
             // initialize the default store if necessary
-            if !aliases.contains_key("default") {
+            if !aliases.contains_key(DEFAULT_COLLECTION_NAME) {
                 let id = store
-                    .create_collection(Some("Default".into()), Some("default".into()))
+                    .create_collection(Some("Default".into()), Some(DEFAULT_COLLECTION_NAME.into()))
                     .await?;
-                aliases.insert(id, vec!["default".into()]);
+                aliases.insert(id, vec![DEFAULT_COLLECTION_NAME.into()]);
             }
 
             // add existing collections
