@@ -134,19 +134,18 @@ impl<'a> Item<'a> {
         } else {
             None
         };
-        *self.last_access.write().await = access_info;
 
         // send desktop notification if enabled
         if self.notify_on_access {
-            if let Some(accessor) = self.last_access.read().await.as_ref() {
-                let label = self
-                    .store
-                    .get_secret_label(self.collection_id.clone(), self.id.clone())
-                    .await
-                    .unwrap_or_else(|_| self.id.to_string());
-                send_access_notification(connection, &label, accessor).await;
-            }
+            let label = self
+                .store
+                .get_secret_label(self.collection_id.clone(), self.id.clone())
+                .await
+                .unwrap_or_else(|_| self.id.to_string());
+            send_access_notification(connection, &label, access_info.as_ref()).await;
         }
+        
+        *self.last_access.write().await = access_info;
 
         session.encrypt(secret_value, header)
     }
@@ -155,18 +154,23 @@ impl<'a> Item<'a> {
 async fn send_access_notification(
     connection: &Connection,
     label: &str,
-    accessor: &SecretAccessor<'_>,
+    accessor: Option<&SecretAccessor<'_>>,
 ) {
-    let process = accessor
-        .process_name
-        .as_ref()
-        .map(|s| s.as_str())
-        .unwrap_or("<unknown>");
     let summary = format!("Secret '{}' accessed", label);
-    let body = format!(
-        "Application <b>{}</b> (PID {}, UID {}) accessed this secret.",
-        process, accessor.pid, accessor.uid
-    );
+    let body = if let Some(accessor) = accessor {
+        let process = accessor
+            .process_name
+            .as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or("<unknown>");
+        format!(
+            "Application <b>{}</b> (PID {}, UID {}) accessed this secret.",
+            process, accessor.pid, accessor.uid
+        )
+    } else {
+        // We don't know anything about the accessor
+        "An unknown application accessed this secret".into()
+    };
     let actions: Vec<&str> = vec![];
     let hints: HashMap<&str, Value<'_>> = HashMap::new();
 
