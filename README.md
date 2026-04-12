@@ -27,7 +27,7 @@ A systemd user unit and a D-Bus session activation file are located in the `syst
 ## Usage
 
 ```
-Usage: pass-secret-service [-d <path>] [-f] [-V] [--log-level <log-level>] [<command>] [<args>]
+Usage: pass-secret-service [-d <path>] [-f] [-n] [-V] [--log-level <log-level>] [<command>] [<args>]
 
 Background daemon for pass-secret-service: An implementation of org.freedesktop.secrets using pass
 
@@ -37,6 +37,9 @@ Options:
   -f, --forget-password-on-lock
                     make gpg-agent forget the cached key password when any
                     collection is locked
+  -n, --notify-on-access
+                    send a desktop notification via org.freedesktop.Notifications
+                    whenever a secret is accessed
   -V, --version     print the current version
   --log-level       log level (overridden by $RUST_LOG environment variable)
                     uses env_logger syntax
@@ -48,6 +51,26 @@ Commands:
 ```
 
 The subcommand is optional; ommitting it defaults to `run-service`.
+
+### Access notifications (`--notify-on-access`)
+
+Pass `-n` / `--notify-on-access` to send a desktop notification via `org.freedesktop.Notifications` every time a secret value is read. Each notification includes the secret label, the accessing application name, its PID, and UID.
+
+```sh
+pass-secret-service -n
+pass-secret-service run-service --notify-on-access
+```
+
+With systemd D-Bus activation, this can be configured with a drop in:
+```sh
+systemctl --user edit pass-secret-service.service
+```
+
+```toml
+[Service]
+ExecStart=
+ExecStart=/usr/bin/pass-secret-service -n
+```
 
 ### Getting the last secret accessor (#20)
 

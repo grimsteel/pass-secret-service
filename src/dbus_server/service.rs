@@ -42,6 +42,7 @@ pub const DEFAULT_COLLECTION_NAME: &'static str = "default";
 pub struct Service<'a> {
     store: Box<dyn SecretStore<'a> + Send + Sync>,
     forget_password_on_lock: bool,
+    notify_on_access: bool,
 }
 
 impl Service<'static> {
@@ -49,6 +50,7 @@ impl Service<'static> {
         connection: Connection,
         pass: &'static PasswordStore,
         forget_password_on_lock: bool,
+        notify_on_access: bool,
     ) -> Result<Self> {
         let store = Box::new(RedbSecretStore::new(pass).await?);
 
@@ -80,7 +82,8 @@ impl Service<'static> {
                         store: store.clone(),
                         id: Arc::new(id),
                         collection_id: collection_id.clone(),
-                        last_access: Default::default()
+                        last_access: Default::default(),
+                        notify_on_access,
                     })
                     .collect();
 
@@ -94,6 +97,7 @@ impl Service<'static> {
                 let c = Collection {
                     store: store.clone(),
                     id: collection_id,
+                    notify_on_access,
                 };
 
                 // add the aliases
@@ -116,6 +120,7 @@ impl Service<'static> {
         Ok(Service {
             store,
             forget_password_on_lock,
+            notify_on_access,
         })
     }
 
@@ -123,6 +128,7 @@ impl Service<'static> {
         Collection {
             id: Arc::new(name),
             store: clone_box(self.store.as_ref()),
+            notify_on_access: self.notify_on_access,
         }
     }
 }

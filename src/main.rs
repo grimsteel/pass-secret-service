@@ -36,7 +36,7 @@ async fn run(args: CliArgs) -> Result {
                 connection.unique_name().map(|s| s.as_str()).unwrap_or("?")
             );
         
-            let service = Service::init(connection.clone(), pass, args.forget_password_on_lock).await?;
+            let service = Service::init(connection.clone(), pass, args.forget_password_on_lock, args.notify_on_access).await?;
         
             connection
                 .object_server()

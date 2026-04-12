@@ -11,6 +11,10 @@ pub struct CliArgs {
     #[argh(switch, short = 'f')]
     pub forget_password_on_lock: bool,
 
+    /// send a desktop notification via org.freedesktop.Notifications whenever a secret is accessed
+    #[argh(switch, short = 'n', long = "notify-on-access")]
+    pub notify_on_access: bool,
+
     /// print the current version
     #[argh(switch, short = 'V', long = "version")]
     pub print_version: bool,
