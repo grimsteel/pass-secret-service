@@ -1,12 +1,18 @@
 use jiff::Timestamp;
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, sync::Arc};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::{sync::RwLock, task::spawn_blocking};
-use std::{collections::HashMap, sync::Arc};
 
 use zbus::{
-    Connection, ObjectServer, fdo::{self, DBusProxy}, interface, message::Header, names::{BusName, UniqueName}, object_server::InterfaceDeref, zvariant::{ObjectPath, Optional, Type, Value}
+    fdo::{self, DBusProxy},
+    interface,
+    message::Header,
+    names::{BusName, UniqueName},
+    object_server::InterfaceDeref,
+    zvariant::{ObjectPath, Optional, Type, Value},
+    Connection, ObjectServer,
 };
 
 use crate::{
@@ -30,7 +36,7 @@ pub struct SecretAccessor<'a> {
     pub pid: u32,
     pub process_name: Optional<String>,
     // ms since epoch
-    pub timestamp: i64
+    pub timestamp: i64,
 }
 
 impl<'a> Default for SecretAccessor<'a> {
@@ -40,22 +46,31 @@ impl<'a> Default for SecretAccessor<'a> {
             uid: 0,
             pid: 0,
             timestamp: 0,
-            process_name: Optional::from(None)
+            process_name: Optional::from(None),
         }
     }
 }
 
 impl SecretAccessor<'static> {
     /// Fetch data about a SecretAccessor given a unique name
-    pub async fn from_dbus_name<'a>(connection: &Connection, name: &UniqueName<'a>) -> Result<Self> {
+    pub async fn from_dbus_name<'a>(
+        connection: &Connection,
+        name: &UniqueName<'a>,
+    ) -> Result<Self> {
         let prox = DBusProxy::new(connection).await?;
         // clone to be owned - we need to store this
         let name: UniqueName<'static> = name.to_owned();
         let bus_name = BusName::Unique(name.as_ref());
         // fetch pid and uid using dbus apis
-        let pid = prox.get_connection_unix_process_id(bus_name.as_ref()).await.map_err(zbus::Error::from)?;
-        let uid = prox.get_connection_unix_user(bus_name).await.map_err(zbus::Error::from)?;
-        
+        let pid = prox
+            .get_connection_unix_process_id(bus_name.as_ref())
+            .await
+            .map_err(zbus::Error::from)?;
+        let uid = prox
+            .get_connection_unix_user(bus_name)
+            .await
+            .map_err(zbus::Error::from)?;
+
         let process_name = spawn_blocking(move || {
             // fetch process info
             let mut system = System::new();
@@ -65,19 +80,22 @@ impl SecretAccessor<'static> {
                 ProcessesToUpdate::Some(&[pid_struct]),
                 false,
                 // only fetches name/pid
-                ProcessRefreshKind::nothing()
+                ProcessRefreshKind::nothing(),
             );
             // get name
             let process = system.process(pid_struct)?;
             Some(process.name().to_string_lossy().into_owned())
-        }).await.unwrap().into();
-        
+        })
+        .await
+        .unwrap()
+        .into();
+
         Ok(Self {
             uid,
             pid,
             dbus_name: Optional::from(Some(name)),
             timestamp: Timestamp::now().as_millisecond(),
-            process_name
+            process_name,
         })
     }
 }
@@ -111,7 +129,7 @@ impl<'a> Item<'a> {
         &self,
         header: &Header<'_>,
         session: &InterfaceDeref<'_, Session>,
-        connection: &Connection
+        connection: &Connection,
     ) -> Result<Secret> {
         debug!(
             "Fetching secret {}/{} for {}",
@@ -127,7 +145,7 @@ impl<'a> Item<'a> {
             .store
             .read_secret(&*self.collection_id, &*self.id, true)
             .await?;
-        
+
         // update fetch access info
         let access_info = if let Some(id) = header.sender() {
             Some(SecretAccessor::from_dbus_name(connection, id).await?)
@@ -144,7 +162,7 @@ impl<'a> Item<'a> {
                 .unwrap_or_else(|_| self.id.to_string());
             send_access_notification(connection, &label, access_info.as_ref()).await;
         }
-        
+
         *self.last_access.write().await = access_info;
 
         session.encrypt(secret_value, header)
@@ -180,7 +198,16 @@ async fn send_access_notification(
             "/org/freedesktop/Notifications",
             Some("org.freedesktop.Notifications"),
             "Notify",
-            &("pass-secret-service", 0u32, "dialog-password", summary.as_str(), body.as_str(), actions, hints, -1i32),
+            &(
+                "pass-secret-service",
+                0u32,
+                "dialog-password",
+                summary.as_str(),
+                body.as_str(),
+                actions,
+                hints,
+                -1i32,
+            ),
         )
         .await
     {
@@ -196,7 +223,7 @@ impl Item<'static> {
     async fn last_access(&'_ self) -> Optional<SecretAccessor<'_>> {
         Optional::from(self.last_access.read().await.clone())
     }
-    
+
     async fn delete(
         &'_ self,
         #[zbus(connection)] connection: &Connection,
@@ -233,7 +260,7 @@ impl Item<'static> {
         session: ObjectPath<'_>,
         #[zbus(header)] header: Header<'_>,
         #[zbus(object_server)] object_server: &ObjectServer,
-        #[zbus(connection)] connection: &Connection
+        #[zbus(connection)] connection: &Connection,
     ) -> Result<(Secret,)> {
         Ok((self
             .read_with_session(
@@ -242,7 +269,7 @@ impl Item<'static> {
                     .ok_or(Error::InvalidSession)?
                     .get()
                     .await,
-                connection
+                connection,
             )
             .await?,))
     }

@@ -181,7 +181,10 @@ impl Collection<'static> {
         Ok(EMPTY_PATH)
     }
 
-    async fn search_items(&'_ self, attributes: HashMap<String, String>) -> Result<Vec<ObjectPath<'_>>> {
+    async fn search_items(
+        &'_ self,
+        attributes: HashMap<String, String>,
+    ) -> Result<Vec<ObjectPath<'_>>> {
         let items = self
             .store
             .search_collection(self.id.clone(), Arc::new(attributes))

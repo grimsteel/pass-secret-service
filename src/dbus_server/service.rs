@@ -307,7 +307,10 @@ impl Service<'static> {
         Ok((vec![], EMPTY_PATH))
     }
 
-    async fn unlock(&'_ self, objects: Vec<OwnedObjectPath>) -> (Vec<OwnedObjectPath>, ObjectPath<'_>) {
+    async fn unlock(
+        &'_ self,
+        objects: Vec<OwnedObjectPath>,
+    ) -> (Vec<OwnedObjectPath>, ObjectPath<'_>) {
         // we don't support locking - just say all of them were unlocked
         (objects, EMPTY_PATH)
     }
@@ -318,7 +321,7 @@ impl Service<'static> {
         session: ObjectPath<'_>,
         #[zbus(object_server)] object_server: &ObjectServer,
         #[zbus(header)] header: Header<'_>,
-        #[zbus(connection)] connection: &Connection
+        #[zbus(connection)] connection: &Connection,
     ) -> Result<HashMap<OwnedObjectPath, Secret>> {
         let session_ref = try_interface(object_server.interface::<_, Session>(&session).await)?
             .ok_or(Error::InvalidSession)?;
