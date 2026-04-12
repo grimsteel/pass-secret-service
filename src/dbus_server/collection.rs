@@ -29,6 +29,7 @@ use super::{
 pub struct Collection<'a> {
     pub store: Box<dyn SecretStore<'a> + Send + Sync>,
     pub id: Arc<String>,
+    pub notify_on_access: bool,
 }
 
 impl<'a> Collection<'a> {
@@ -37,7 +38,8 @@ impl<'a> Collection<'a> {
             id: Arc::new(id),
             collection_id: self.id.clone(),
             store: clone_box(self.store.as_ref()),
-            last_access: Default::default()
+            last_access: Default::default(),
+            notify_on_access: self.notify_on_access,
         }
     }
 

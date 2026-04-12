@@ -1,12 +1,12 @@
 use jiff::Timestamp;
-use log::debug;
+use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::{sync::RwLock, task::spawn_blocking};
 use std::{collections::HashMap, sync::Arc};
 
 use zbus::{
-    Connection, ObjectServer, fdo::{self, DBusProxy}, interface, message::Header, names::{BusName, UniqueName}, object_server::InterfaceDeref, zvariant::{ObjectPath, Optional, Type}
+    Connection, ObjectServer, fdo::{self, DBusProxy}, interface, message::Header, names::{BusName, UniqueName}, object_server::InterfaceDeref, zvariant::{ObjectPath, Optional, Type, Value}
 };
 
 use crate::{
@@ -88,6 +88,7 @@ pub struct Item<'a> {
     pub id: Arc<String>,
     pub store: Box<dyn SecretStore<'a> + Send + Sync>,
     pub last_access: Arc<RwLock<Option<SecretAccessor<'static>>>>,
+    pub notify_on_access: bool,
 }
 
 impl<'a> Item<'a> {
@@ -135,7 +136,51 @@ impl<'a> Item<'a> {
         };
         *self.last_access.write().await = access_info;
 
+        // send desktop notification if enabled
+        if self.notify_on_access {
+            if let Some(accessor) = self.last_access.read().await.as_ref() {
+                let label = self
+                    .store
+                    .get_secret_label(self.collection_id.clone(), self.id.clone())
+                    .await
+                    .unwrap_or_else(|_| self.id.to_string());
+                send_access_notification(connection, &label, accessor).await;
+            }
+        }
+
         session.encrypt(secret_value, header)
+    }
+}
+
+async fn send_access_notification(
+    connection: &Connection,
+    label: &str,
+    accessor: &SecretAccessor<'_>,
+) {
+    let process = accessor
+        .process_name
+        .as_ref()
+        .map(|s| s.as_str())
+        .unwrap_or("<unknown>");
+    let summary = format!("Secret '{}' accessed", label);
+    let body = format!(
+        "Application <b>{}</b> (PID {}, UID {}) accessed this secret.",
+        process, accessor.pid, accessor.uid
+    );
+    let actions: Vec<&str> = vec![];
+    let hints: HashMap<&str, Value<'_>> = HashMap::new();
+
+    if let Err(e) = connection
+        .call_method(
+            Some("org.freedesktop.Notifications"),
+            "/org/freedesktop/Notifications",
+            Some("org.freedesktop.Notifications"),
+            "Notify",
+            &("pass-secret-service", 0u32, "dialog-password", summary.as_str(), body.as_str(), actions, hints, -1i32),
+        )
+        .await
+    {
+        warn!("Failed to send access notification: {}", e);
     }
 }
 
