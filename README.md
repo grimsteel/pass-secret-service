@@ -61,6 +61,17 @@ pass-secret-service -n
 pass-secret-service run-service --notify-on-access
 ```
 
+With systemd D-Bus activation, this can be configured with a drop in:
+```sh
+systemctl --user edit pass-secret-service.service
+```
+
+```toml
+[Service]
+ExecStart=
+ExecStart=/usr/bin/pass-secret-service -n
+```
+
 ### Getting the last secret accessor (#20)
 
 The service stores information about the last accessor for each secret in memory.
