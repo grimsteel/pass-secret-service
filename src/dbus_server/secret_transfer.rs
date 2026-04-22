@@ -17,6 +17,21 @@ use zbus::zvariant::{OwnedObjectPath, Type};
 /// base for DH
 static TWO: LazyLock<BigUint> = LazyLock::new(|| BigUint::from_u8(2).unwrap());
 
+/// Big-endian byte length of the DH prime.
+const DH_PRIME_BYTES: usize = 128;
+
+/// Big-endian byte encoding of `n`, left-padded with zeros to exactly `len` bytes.
+/// `BigUint::to_bytes_be` strips leading zeros, so the raw output can be shorter
+/// than the prime. DH shared secrets and public keys must be fed to peers at the
+/// full prime length; zeros belong at the most-significant end.
+fn to_bytes_be_padded(n: &BigUint, len: usize) -> Vec<u8> {
+    let bytes = n.to_bytes_be();
+    debug_assert!(bytes.len() <= len);
+    let mut out = vec![0u8; len];
+    out[len - bytes.len()..].copy_from_slice(&bytes);
+    out
+}
+
 /// Second Oakley Prime - https://www.ietf.org/rfc/rfc2409.txt 6.2
 static DH_SECOND_OAKLEY_PRIME: LazyLock<BigUint> = LazyLock::new(|| {
     BigUint::from_bytes_be(&[
@@ -89,9 +104,10 @@ impl DhIetf1024Sha256Aes128CbcPkcs7Transfer {
         let client_pub_key = BigUint::from_bytes_be(client_pub_key);
 
         // client pubkey ^ priv key % dh prime
-        let mut shared_secret = client_pub_key.modpow(&priv_key, dh_prime).to_bytes_be();
-        // pad to 128 bytes
-        shared_secret.append(&mut vec![0; 128 - shared_secret.len()]);
+        let shared_secret = to_bytes_be_padded(
+            &client_pub_key.modpow(&priv_key, dh_prime),
+            DH_PRIME_BYTES,
+        );
 
         // no salt
         let hk = Hkdf::<Sha256>::new(None, &shared_secret[..]);
@@ -108,12 +124,13 @@ impl DhIetf1024Sha256Aes128CbcPkcs7Transfer {
         })
     }
 
-    /// Returns the big endian encoded public key
+    /// Returns the big endian encoded public key, zero-padded to the prime length.
     pub fn get_pub_key(&self) -> Vec<u8> {
         // 2 ^ priv_key % dh_prime
-        (&*TWO)
-            .modpow(&self.server_priv, &*DH_SECOND_OAKLEY_PRIME)
-            .to_bytes_be()
+        to_bytes_be_padded(
+            &(&*TWO).modpow(&self.server_priv, &*DH_SECOND_OAKLEY_PRIME),
+            DH_PRIME_BYTES,
+        )
     }
 }
 
@@ -142,5 +159,43 @@ impl SessionTransfer for DhIetf1024Sha256Aes128CbcPkcs7Transfer {
             value: encrypted_secret,
             content_type: "text/plain".to_string(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pad_preserves_full_width_value() {
+        let n = BigUint::from_bytes_be(&[0xAAu8; DH_PRIME_BYTES]);
+        assert_eq!(to_bytes_be_padded(&n, DH_PRIME_BYTES), vec![0xAA; DH_PRIME_BYTES]);
+    }
+
+    #[test]
+    fn pad_left_pads_short_value() {
+        // BigUint value 1 serializes to a single byte; it must end up in the
+        // least-significant (last) byte, with zeros filling the top.
+        let one = BigUint::from(1u8);
+        let padded = to_bytes_be_padded(&one, DH_PRIME_BYTES);
+        assert_eq!(padded.len(), DH_PRIME_BYTES);
+        assert!(padded[..DH_PRIME_BYTES - 1].iter().all(|b| *b == 0));
+        assert_eq!(padded[DH_PRIME_BYTES - 1], 1);
+    }
+
+    #[test]
+    fn pad_handles_zero_high_byte() {
+        // 1024-bit value with the top byte zero: to_bytes_be returns 127 bytes.
+        let mut raw = [0u8; DH_PRIME_BYTES];
+        raw[0] = 0x00;
+        raw[1] = 0x7F;
+        for b in raw.iter_mut().skip(2) {
+            *b = 0x42;
+        }
+        let n = BigUint::from_bytes_be(&raw);
+        assert_eq!(n.to_bytes_be().len(), DH_PRIME_BYTES - 1);
+        let padded = to_bytes_be_padded(&n, DH_PRIME_BYTES);
+        assert_eq!(padded.len(), DH_PRIME_BYTES);
+        assert_eq!(padded, raw);
     }
 }
