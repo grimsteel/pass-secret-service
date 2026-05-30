@@ -121,6 +121,7 @@ async fn run(args: CliArgs) -> Result {
                 }
                 Some(SecretAccessor {
                     uid,
+                    username,
                     pid,
                     process_name,
                     timestamp,
@@ -137,7 +138,13 @@ async fn run(args: CliArgs) -> Result {
                         "The last access of {secret_path} was {}:",
                         SpanPrinter::new().duration_to_string(&diff)
                     );
-                    info!("  User: {uid}");
+                    info!(
+                        "  User: {} (UID {uid})",
+                        username
+                            .as_ref()
+                            .map(|s| &s[..])
+                            .unwrap_or_else(|| "<unknown>")
+                    );
                     info!(
                         "  Program: {} (PID {pid})",
                         process_name

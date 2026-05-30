@@ -1,7 +1,7 @@
 use jiff::Timestamp;
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, ffi::CStr, mem::MaybeUninit, ptr, sync::Arc};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::{sync::RwLock, task::spawn_blocking};
 
@@ -33,6 +33,7 @@ pub struct SecretAccessor<'a> {
     #[serde(borrow)]
     pub dbus_name: Optional<UniqueName<'a>>,
     pub uid: u32,
+    pub username: Optional<String>,
     pub pid: u32,
     pub process_name: Optional<String>,
     // ms since epoch
@@ -44,11 +45,48 @@ impl<'a> Default for SecretAccessor<'a> {
         Self {
             dbus_name: Optional::from(None),
             uid: 0,
+            username: Optional::from(None),
             pid: 0,
             timestamp: 0,
             process_name: Optional::from(None),
         }
     }
+}
+
+fn username_from_uid(uid: u32) -> Option<String> {
+    let buffer_len = unsafe {
+        match libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) {
+            n if n > 0 => n as usize,
+            _ => 16_384,
+        }
+    };
+    let mut passwd = MaybeUninit::<libc::passwd>::uninit();
+    let mut result = ptr::null_mut();
+    let mut buffer = vec![0 as libc::c_char; buffer_len];
+
+    let status = unsafe {
+        libc::getpwuid_r(
+            uid as libc::uid_t,
+            passwd.as_mut_ptr(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+
+    if status != 0 || result.is_null() {
+        return None;
+    }
+
+    let passwd = unsafe { passwd.assume_init() };
+    if passwd.pw_name.is_null() {
+        return None;
+    }
+
+    unsafe { CStr::from_ptr(passwd.pw_name) }
+        .to_str()
+        .ok()
+        .map(str::to_owned)
 }
 
 impl SecretAccessor<'static> {
@@ -71,6 +109,11 @@ impl SecretAccessor<'static> {
             .await
             .map_err(zbus::Error::from)?;
 
+        let username = spawn_blocking(move || username_from_uid(uid))
+            .await
+            .unwrap()
+            .into();
+
         let process_name = spawn_blocking(move || {
             // fetch process info
             let mut system = System::new();
@@ -92,6 +135,7 @@ impl SecretAccessor<'static> {
 
         Ok(Self {
             uid,
+            username,
             pid,
             dbus_name: Optional::from(Some(name)),
             timestamp: Timestamp::now().as_millisecond(),
@@ -181,9 +225,14 @@ async fn send_access_notification(
             .as_ref()
             .map(|s| s.as_str())
             .unwrap_or("<unknown>");
+        let user = accessor
+            .username
+            .as_ref()
+            .map(|s| format!("{} (UID {})", s, accessor.uid))
+            .unwrap_or_else(|| format!("UID {}", accessor.uid));
         format!(
-            "Application <b>{}</b> (PID {}, UID {}) accessed this secret.",
-            process, accessor.pid, accessor.uid
+            "Application <b>{}</b> (PID {}, {}) accessed this secret.",
+            process, accessor.pid, user
         )
     } else {
         // We don't know anything about the accessor
