@@ -17,6 +17,8 @@ use tokio::{
 
 use crate::error::{Error, Result};
 
+const SYMMETRIC_GPG_PASSPHRASE: &str = "pass-secret-service-proof-passphrase";
+
 #[derive(Debug)]
 pub struct PasswordStore {
     pub directory: PathBuf,
@@ -88,16 +90,28 @@ impl PasswordStore {
         command
     }
 
+    fn add_symmetric_passphrase_args(command: &mut Command) -> &mut Command {
+        command
+            .arg("--batch")
+            .arg("--yes")
+            .arg("--pinentry-mode")
+            .arg("loopback")
+            .arg("--passphrase")
+            .arg(SYMMETRIC_GPG_PASSPHRASE)
+            .arg("--no-symkey-cache")
+    }
+
     /// Read a single password at the given path
-    pub async fn read_password(&self, path: impl AsRef<Path>, can_prompt: bool) -> Result<Vec<u8>> {
+    pub async fn read_password(
+        &self,
+        path: impl AsRef<Path>,
+        _can_prompt: bool,
+    ) -> Result<Vec<u8>> {
         let contents = read(self.get_full_secret_path(path)).await?;
 
         let mut command = self.make_gpg_process();
 
-        if !can_prompt {
-            // don't activate pinentry if we can't prompt
-            command.arg("--pinentry-mode=error");
-        }
+        Self::add_symmetric_passphrase_args(&mut command);
 
         command.arg("--decrypt").arg("-");
 
@@ -158,16 +172,13 @@ impl PasswordStore {
 
         self.ensure_dirs(dir).await?;
 
-        let gpg_ids = self.get_gpg_ids(dir).await?;
+        let mut command = self.make_gpg_process();
+        Self::add_symmetric_passphrase_args(&mut command);
 
-        let mut process = self
-            .make_gpg_process()
-            .arg("--encrypt")
-            .args(
-                gpg_ids
-                    .into_iter()
-                    .map(|recipient| format!("--recipient={recipient}")),
-            )
+        let mut process = command
+            .arg("--symmetric")
+            .arg("--cipher-algo")
+            .arg("AES256")
             .arg("-")
             .spawn()?;
 
