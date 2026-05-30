@@ -19,8 +19,10 @@ use crate::{
 };
 
 mod cli;
+mod config;
 mod dbus_server;
 mod error;
+mod http_server;
 mod key_store;
 mod pass;
 mod secret_store;
@@ -34,12 +36,14 @@ async fn run(args: CliArgs) -> Result {
         None | Some(CliSubcommand::RunService(_)) => {
             // None = no subcommand given. Default is to run service
 
-            let startup_keys = key_store::initialize().await?;
+            let config = config::AppConfig::from_env()?;
+            let startup_keys = key_store::initialize(&config).await?;
             let symmetric_gpg_passphrase = key_store::key_to_passphrase(&startup_keys.local_key);
             let pass = Box::leak(Box::new(PasswordStore::from_env(
                 args.password_store_dir.map(|d| d.into()),
                 symmetric_gpg_passphrase,
             )?));
+            let _http_server = http_server::spawn(config, startup_keys.local_key).await?;
 
             let connection = Connection::session().await?;
 

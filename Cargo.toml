@@ -8,7 +8,11 @@ aes = "0.8.4"
 aes-gcm = "0.10.3"
 argh = "0.1.13"
 async-trait = "0.1.89"
+axum = { version = "0.7.9", default-features = false, features = ["http1", "json", "tokio"] }
+base64 = "0.22.1"
+bs58 = "0.5.1"
 cbc = { version = "0.1.2", features = ["std"] }
+cuid2 = "0.1.6"
 dyn-clone = "1.0.20"
 env_logger = "0.11.8"
 futures-util = "0.3.30"
@@ -19,13 +23,17 @@ log = "0.4.27"
 nanoid = "0.4.0"
 num = { version = "0.4.3", features = ["rand"] }
 rand = "0.8.5"
+qrcode = { version = "0.14.1", default-features = false }
 redb = "2.1.1"
+rsa = { version = "0.9.10", features = ["sha2"] }
+schemars = "0.8.22"
 serde = "1.0.204"
 serde_json = "1.0.145"
 sha2 = "0.10.9"
 sysinfo = { version = "0.38.0", default-features = false, features = ["system"] }
 thiserror = "2.0.12"
-tokio = { version = "1.38.1", features = ["fs", "rt", "rt-multi-thread", "macros", "process", "sync"] }
+tokio = { version = "1.38.1", features = ["fs", "rt", "rt-multi-thread", "macros", "net", "process", "sync"] }
+uuid = { version = "1.23.2", features = ["v4"] }
 zbus = { version = "4.3.1", default-features = false, features = ["tokio"] }
 
 [profile.release]

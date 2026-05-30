@@ -17,6 +17,10 @@ pub enum Error {
     RedbError(#[from] redb::Error),
     #[error("Secret encryption error: {0}")]
     EncryptionError(&'static str),
+    #[error("Configuration error: {0}")]
+    ConfigError(String),
+    #[error("Invalid request: {0}")]
+    InvalidRequest(String),
     #[error("GPG Error: {0}")]
     GpgError(String),
     #[error("Pass is not initialized")]
@@ -37,6 +41,8 @@ impl DBusError for Error {
             Error::DbusError(e) => msg.build(&(e.to_string(),)),
             Error::RedbError(e) => msg.build(&(e.to_string(),)),
             Error::GpgError(e) => msg.build(&(e,)),
+            Error::ConfigError(e) => msg.build(&(e,)),
+            Error::InvalidRequest(e) => msg.build(&(e,)),
             _ => msg.build(&()),
         }
     }
@@ -50,6 +56,8 @@ impl DBusError for Error {
             Error::DbusError(_) => "org.freedesktop.zbus.Error",
             Error::RedbError(_) => "me.grimsteel.PassSecretService.ReDBError",
             Error::GpgError(_) => "me.grimsteel.PassSecretService.GPGError",
+            Error::ConfigError(_) => "me.grimsteel.PassSecretService.ConfigError",
+            Error::InvalidRequest(_) => "me.grimsteel.PassSecretService.InvalidRequest",
             Error::EncryptionError(_) => "me.grimsteel.PassSecretService.EncryptionError",
             Error::NotInitialized => "me.grimsteel.PassSecretService.PassNotInitialized",
             Error::InvalidSession => "org.freedesktop.Secret.Error.NoSession",
@@ -61,6 +69,8 @@ impl DBusError for Error {
         match self {
             Error::DbusError(zbus::Error::MethodError(_, desc, _)) => desc.as_deref(),
             Error::GpgError(e) => Some(e.as_str()),
+            Error::ConfigError(e) => Some(e.as_str()),
+            Error::InvalidRequest(e) => Some(e.as_str()),
             _ => None,
         }
     }
