@@ -17,19 +17,21 @@ use tokio::{
 
 use crate::error::{Error, Result};
 
-const SYMMETRIC_GPG_PASSPHRASE: &str = "pass-secret-service-proof-passphrase";
-
 #[derive(Debug)]
 pub struct PasswordStore {
     pub directory: PathBuf,
     gpg_opts: Option<String>,
+    symmetric_gpg_passphrase: String,
     file_mode: u32,
     dir_mode: u32,
 }
 
 impl PasswordStore {
     /// Initialize this PasswordStore instance from env vars
-    pub fn from_env(password_store_dir: Option<PathBuf>) -> Result<Self> {
+    pub fn from_env(
+        password_store_dir: Option<PathBuf>,
+        symmetric_gpg_passphrase: String,
+    ) -> Result<Self> {
         let mut env: HashMap<String, String> = env::vars().collect();
 
         // Either ~/.password-store or $PASSWORD_STORE_DIR
@@ -57,6 +59,7 @@ impl PasswordStore {
         Ok(Self {
             directory,
             gpg_opts,
+            symmetric_gpg_passphrase,
             dir_mode,
             file_mode,
         })
@@ -90,14 +93,14 @@ impl PasswordStore {
         command
     }
 
-    fn add_symmetric_passphrase_args(command: &mut Command) -> &mut Command {
+    fn add_symmetric_passphrase_args<'a>(&self, command: &'a mut Command) -> &'a mut Command {
         command
             .arg("--batch")
             .arg("--yes")
             .arg("--pinentry-mode")
             .arg("loopback")
             .arg("--passphrase")
-            .arg(SYMMETRIC_GPG_PASSPHRASE)
+            .arg(&self.symmetric_gpg_passphrase)
             .arg("--no-symkey-cache")
     }
 
@@ -111,7 +114,7 @@ impl PasswordStore {
 
         let mut command = self.make_gpg_process();
 
-        Self::add_symmetric_passphrase_args(&mut command);
+        self.add_symmetric_passphrase_args(&mut command);
 
         command.arg("--decrypt").arg("-");
 
@@ -173,7 +176,7 @@ impl PasswordStore {
         self.ensure_dirs(dir).await?;
 
         let mut command = self.make_gpg_process();
-        Self::add_symmetric_passphrase_args(&mut command);
+        self.add_symmetric_passphrase_args(&mut command);
 
         let mut process = command
             .arg("--symmetric")
