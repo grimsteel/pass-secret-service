@@ -1,6 +1,7 @@
+use secure_types::SecureString;
 use std::{
     collections::{HashMap, HashSet},
-    env,
+    env, fmt,
     fs::{FileType, Metadata},
     io::{self, ErrorKind},
     path::{Path, PathBuf},
@@ -17,20 +18,30 @@ use tokio::{
 
 use crate::error::{Error, Result};
 
-#[derive(Debug)]
 pub struct PasswordStore {
     pub directory: PathBuf,
     gpg_opts: Option<String>,
-    symmetric_gpg_passphrase: String,
+    symmetric_gpg_passphrase: SecureString,
     file_mode: u32,
     dir_mode: u32,
+}
+
+impl fmt::Debug for PasswordStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PasswordStore")
+            .field("directory", &self.directory)
+            .field("gpg_opts", &self.gpg_opts)
+            .field("file_mode", &self.file_mode)
+            .field("dir_mode", &self.dir_mode)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PasswordStore {
     /// Initialize this PasswordStore instance from env vars
     pub fn from_env(
         password_store_dir: Option<PathBuf>,
-        symmetric_gpg_passphrase: String,
+        symmetric_gpg_passphrase: SecureString,
     ) -> Result<Self> {
         let mut env: HashMap<String, String> = env::vars().collect();
 
@@ -94,14 +105,16 @@ impl PasswordStore {
     }
 
     fn add_symmetric_passphrase_args<'a>(&self, command: &'a mut Command) -> &'a mut Command {
-        command
-            .arg("--batch")
-            .arg("--yes")
-            .arg("--pinentry-mode")
-            .arg("loopback")
-            .arg("--passphrase")
-            .arg(&self.symmetric_gpg_passphrase)
-            .arg("--no-symkey-cache")
+        self.symmetric_gpg_passphrase.unlock_str(|passphrase| {
+            command
+                .arg("--batch")
+                .arg("--yes")
+                .arg("--pinentry-mode")
+                .arg("loopback")
+                .arg("--passphrase")
+                .arg(passphrase)
+                .arg("--no-symkey-cache")
+        })
     }
 
     /// Read a single password at the given path

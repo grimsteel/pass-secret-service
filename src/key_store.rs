@@ -1,5 +1,6 @@
 use std::{
-    os::unix::fs::PermissionsExt,
+    io::Write,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
@@ -11,9 +12,12 @@ use cuid2::CuidConstructor;
 use hkdf::Hkdf;
 use qrcode::{render::unicode, QrCode};
 use rand::{rngs::OsRng, RngCore};
+use secure_types::{SecureArray, SecureBytes, SecureString};
 use sha2::Sha256;
 use tokio::{
-    fs::{create_dir_all, metadata, read, read_dir, set_permissions, OpenOptions},
+    fs::{
+        create_dir_all, metadata, read, read_dir, set_permissions, OpenOptions as TokioOpenOptions,
+    },
     io::{self, AsyncWriteExt},
 };
 
@@ -34,9 +38,12 @@ const AES_GCM_NONCE_BYTES: usize = 12;
 const ENCRYPTED_BLOB_MAGIC: &[u8] = b"alohomora-aes256-gcm-v1\0";
 const PAIRING_TOKEN_PREFIX: &str = "alohomora";
 const PAIRING_TOKEN_ID_LEN: u16 = 10;
-#[derive(Debug, Clone)]
+pub type SecureKey = SecureArray<u8, AES256_KEY_BYTES>;
+pub type SecureBlob = SecureBytes;
+
+#[derive(Clone)]
 pub struct StartupKeys {
-    pub local_key: [u8; AES256_KEY_BYTES],
+    pub local_key: SecureKey,
 }
 
 pub async fn initialize(config: &AppConfig) -> Result<StartupKeys> {
@@ -60,7 +67,7 @@ async fn ensure_private_dir(path: &Path) -> Result {
 }
 
 async fn write_private_file(path: &Path, contents: &[u8]) -> Result {
-    let mut file = OpenOptions::new()
+    let mut file = TokioOpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
@@ -72,16 +79,28 @@ async fn write_private_file(path: &Path, contents: &[u8]) -> Result {
     Ok(())
 }
 
-async fn read_or_create_local_key(path: &Path) -> Result<[u8; AES256_KEY_BYTES]> {
+fn write_private_secure_file(path: &Path, contents: &SecureBlob) -> Result {
+    contents.unlock_slice(|contents| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(contents)?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        Ok(())
+    })
+}
+
+async fn read_or_create_local_key(path: &Path) -> Result<SecureKey> {
     match read(path).await {
-        Ok(bytes) => bytes
-            .try_into()
-            .map_err(|_| Error::EncryptionError("local key must be 32 bytes")),
+        Ok(bytes) => secure_key_from_vec(bytes),
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             let mut key = [0u8; AES256_KEY_BYTES];
             OsRng.fill_bytes(&mut key);
             write_private_file(path, &key).await?;
-            Ok(key)
+            secure_key_from_array(key)
         }
         Err(e) => Err(e.into()),
     }
@@ -135,7 +154,7 @@ async fn has_temp_pairing_keys(key_dir: &Path) -> Result<bool> {
 
 async fn create_temp_pairing_key(
     key_dir: &Path,
-    local_key: &[u8; AES256_KEY_BYTES],
+    local_key: &SecureKey,
     config: &AppConfig,
 ) -> Result {
     let pairing_token = generate_pairing_token();
@@ -144,13 +163,16 @@ async fn create_temp_pairing_key(
 
     let mut secret_key = [0u8; AES256_KEY_BYTES];
     OsRng.fill_bytes(&mut secret_key);
+    let secret_key = secure_key_from_array(secret_key)?;
 
     let token_key = derive_token_key(&pairing_token.value)?;
 
-    let locally_encrypted = encrypt_aes256_gcm(local_key, &secret_key)?;
-    let token_encrypted = encrypt_aes256_gcm(&token_key, &locally_encrypted)?;
+    let locally_encrypted =
+        secret_key.unlock(|secret_key| encrypt_aes256_gcm(local_key, secret_key))?;
+    let token_encrypted =
+        locally_encrypted.unlock_slice(|encrypted| encrypt_aes256_gcm(&token_key, encrypted))?;
 
-    write_private_file(&temp_dir.join(ENC_SECRET_KEY_FILE), &token_encrypted).await?;
+    write_private_secure_file(&temp_dir.join(ENC_SECRET_KEY_FILE), &token_encrypted)?;
 
     println!("Initial Alohomora pairing token: {}", pairing_token.value);
     print_setup_qr_code(&pairing_token.value, config)?;
@@ -224,33 +246,36 @@ fn print_setup_qr_code(token: &str, config: &AppConfig) -> Result {
     Ok(())
 }
 
-fn derive_token_key(token: &str) -> Result<[u8; AES256_KEY_BYTES]> {
+fn derive_token_key(token: &str) -> Result<SecureKey> {
     let hk = Hkdf::<Sha256>::new(None, token.as_bytes());
     let mut key = [0u8; AES256_KEY_BYTES];
     hk.expand(b"alohomora temp pairing token aes256 key", &mut key)
         .map_err(|_| Error::EncryptionError("failed to derive token key"))?;
-    Ok(key)
+    secure_key_from_array(key)
 }
 
-pub fn encrypt_aes256_gcm(key: &[u8; AES256_KEY_BYTES], plaintext: &[u8]) -> Result<Vec<u8>> {
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|_| Error::EncryptionError("invalid AES256 key length"))?;
+pub fn encrypt_aes256_gcm(key: &SecureKey, plaintext: &[u8]) -> Result<SecureBlob> {
+    key.unlock(|key| {
+        let cipher = Aes256Gcm::new_from_slice(key)
+            .map_err(|_| Error::EncryptionError("invalid AES256 key length"))?;
 
-    let mut nonce = [0u8; AES_GCM_NONCE_BYTES];
-    OsRng.fill_bytes(&mut nonce);
+        let mut nonce = [0u8; AES_GCM_NONCE_BYTES];
+        OsRng.fill_bytes(&mut nonce);
 
-    let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce), plaintext)
-        .map_err(|_| Error::EncryptionError("AES256-GCM encryption failed"))?;
+        let ciphertext = cipher
+            .encrypt(Nonce::from_slice(&nonce), plaintext)
+            .map_err(|_| Error::EncryptionError("AES256-GCM encryption failed"))?;
 
-    let mut out = Vec::with_capacity(ENCRYPTED_BLOB_MAGIC.len() + nonce.len() + ciphertext.len());
-    out.extend_from_slice(ENCRYPTED_BLOB_MAGIC);
-    out.extend_from_slice(&nonce);
-    out.extend_from_slice(&ciphertext);
-    Ok(out)
+        let mut out =
+            Vec::with_capacity(ENCRYPTED_BLOB_MAGIC.len() + nonce.len() + ciphertext.len());
+        out.extend_from_slice(ENCRYPTED_BLOB_MAGIC);
+        out.extend_from_slice(&nonce);
+        out.extend_from_slice(&ciphertext);
+        secure_blob_from_vec(out)
+    })
 }
 
-pub fn decrypt_aes256_gcm(key: &[u8; AES256_KEY_BYTES], encrypted: &[u8]) -> Result<Vec<u8>> {
+pub fn decrypt_aes256_gcm(key: &SecureKey, encrypted: &[u8]) -> Result<SecureBlob> {
     if !encrypted.starts_with(ENCRYPTED_BLOB_MAGIC) {
         return Err(Error::EncryptionError("unknown encrypted blob format"));
     }
@@ -261,46 +286,46 @@ pub fn decrypt_aes256_gcm(key: &[u8; AES256_KEY_BYTES], encrypted: &[u8]) -> Res
     }
 
     let (nonce, ciphertext) = encrypted.split_at(AES_GCM_NONCE_BYTES);
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|_| Error::EncryptionError("invalid AES256 key length"))?;
-    cipher
-        .decrypt(Nonce::from_slice(nonce), ciphertext)
-        .map_err(|_| Error::EncryptionError("AES256-GCM decryption failed"))
+    key.unlock(|key| {
+        let cipher = Aes256Gcm::new_from_slice(key)
+            .map_err(|_| Error::EncryptionError("invalid AES256 key length"))?;
+        let plaintext = cipher
+            .decrypt(Nonce::from_slice(nonce), ciphertext)
+            .map_err(|_| Error::EncryptionError("AES256-GCM decryption failed"))?;
+        secure_blob_from_vec(plaintext)
+    })
 }
 
-pub async fn read_temp_secret_key(
-    token: &str,
-    local_key: &[u8; AES256_KEY_BYTES],
-) -> Result<[u8; AES256_KEY_BYTES]> {
+pub async fn read_temp_secret_key(token: &str, local_key: &SecureKey) -> Result<SecureKey> {
     let pairing_token = parse_pairing_token(token)?;
     let token_key = derive_token_key(&pairing_token.value)?;
-    let encrypted =
+    let encrypted = secure_blob_from_vec(
         read(temp_pairing_key_dir(Path::new(KEY_DIR), &pairing_token.id).join(ENC_SECRET_KEY_FILE))
-            .await?;
-    let locally_encrypted = decrypt_aes256_gcm(&token_key, &encrypted)?;
-    let secret_key = decrypt_aes256_gcm(local_key, &locally_encrypted)?;
+            .await?,
+    )?;
+    let locally_encrypted =
+        encrypted.unlock_slice(|encrypted| decrypt_aes256_gcm(&token_key, encrypted))?;
+    let secret_key = locally_encrypted
+        .unlock_slice(|locally_encrypted| decrypt_aes256_gcm(local_key, locally_encrypted))?;
 
-    secret_key
-        .try_into()
-        .map_err(|_| Error::EncryptionError("secret key must be 32 bytes"))
+    SecureKey::try_from(secret_key).map_err(secure_memory_error)
 }
 
 pub async fn store_android_device_registration(
     device_uuid: &str,
-    encrypted_registration_json: &[u8],
-    encrypted_secret_key: &[u8],
+    encrypted_registration_json: &SecureBlob,
+    encrypted_secret_key: &SecureBlob,
 ) -> Result {
     let device_dir = Path::new(KEY_DIR)
         .join(DEVICE_KEYS_DIR)
         .join(ANDROID_DEVICE_KEYS_DIR)
         .join(device_uuid);
     ensure_private_dir(&device_dir).await?;
-    write_private_file(
+    write_private_secure_file(
         &device_dir.join(ENC_DEVICE_REGISTRATION_FILE),
         encrypted_registration_json,
-    )
-    .await?;
-    write_private_file(&device_dir.join(ENC_SECRET_KEY_FILE), encrypted_secret_key).await?;
+    )?;
+    write_private_secure_file(&device_dir.join(ENC_SECRET_KEY_FILE), encrypted_secret_key)?;
     Ok(())
 }
 
@@ -308,8 +333,8 @@ fn temp_pairing_key_dir(key_dir: &Path, token_id: &str) -> PathBuf {
     key_dir.join(TEMP_PAIRING_KEYS_DIR).join(token_id)
 }
 
-pub fn key_to_passphrase(key: &[u8; AES256_KEY_BYTES]) -> String {
-    hex_encode(key)
+pub fn key_to_passphrase(key: &SecureKey) -> SecureString {
+    key.unlock(|key| SecureString::from(hex_encode(key)))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -320,6 +345,26 @@ fn hex_encode(bytes: &[u8]) -> String {
         output.push(HEX[(byte & 0x0f) as usize] as char);
     }
     output
+}
+
+fn secure_key_from_array(key: [u8; AES256_KEY_BYTES]) -> Result<SecureKey> {
+    let mut key = key;
+    SecureKey::from_slice_mut(&mut key).map_err(secure_memory_error)
+}
+
+fn secure_key_from_vec(bytes: Vec<u8>) -> Result<SecureKey> {
+    let key: [u8; AES256_KEY_BYTES] = bytes
+        .try_into()
+        .map_err(|_| Error::EncryptionError("local key must be 32 bytes"))?;
+    secure_key_from_array(key)
+}
+
+pub fn secure_blob_from_vec(bytes: Vec<u8>) -> Result<SecureBlob> {
+    SecureBlob::from_vec(bytes).map_err(secure_memory_error)
+}
+
+fn secure_memory_error(_: secure_types::Error) -> Error {
+    Error::EncryptionError("secure memory operation failed")
 }
 
 #[cfg(test)]

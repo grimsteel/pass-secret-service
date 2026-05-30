@@ -14,12 +14,11 @@ use rsa::{pkcs8::DecodePublicKey, sha2::Sha256, Oaep, RsaPublicKey};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::{net::TcpListener, task::JoinHandle};
-use uuid::Uuid;
 
 use crate::{
     config::AppConfig,
     error::{Error, Result},
-    key_store::{self, AES256_KEY_BYTES},
+    key_store::{self, SecureBlob, SecureKey},
 };
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -75,6 +74,7 @@ pub struct DeviceInfo {
 #[serde(deny_unknown_fields)]
 pub struct RegisterRequest {
     pub schema_version: u32,
+    pub device_uuid: String,
     pub keychain: KeychainInfo,
     #[serde(default)]
     pub initialisation_token: Option<String>,
@@ -90,6 +90,7 @@ pub struct RegisterRequest {
 pub struct AuthenticateRequest {
     pub schema_version: u32,
     pub request_uuid: String,
+    pub device_uuid: String,
     pub keychain: KeychainInfo,
     pub decrypted_blob_b64: String,
     pub app: AppInfo,
@@ -98,7 +99,7 @@ pub struct AuthenticateRequest {
 
 #[derive(Clone)]
 struct ApiState {
-    local_key: [u8; AES256_KEY_BYTES],
+    local_key: SecureKey,
 }
 
 #[derive(Debug)]
@@ -138,7 +139,7 @@ impl From<Error> for ApiError {
     }
 }
 
-pub async fn spawn(config: AppConfig, local_key: [u8; AES256_KEY_BYTES]) -> Result<JoinHandle<()>> {
+pub async fn spawn(config: AppConfig, local_key: SecureKey) -> Result<JoinHandle<()>> {
     let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.internal_port));
     let listener = TcpListener::bind(addr).await?;
     info!(
@@ -185,19 +186,19 @@ async fn register(
 
     let secret_key =
         key_store::read_temp_secret_key(initialisation_token, &state.local_key).await?;
-    let locally_encrypted_secret_key =
-        key_store::encrypt_aes256_gcm(&state.local_key, &secret_key)?;
-    let encrypted_secret_key =
-        encrypt_with_registration_public_key(&request.public_key, &locally_encrypted_secret_key)?;
+    let locally_encrypted_secret_key = secret_key
+        .unlock(|secret_key| key_store::encrypt_aes256_gcm(&state.local_key, secret_key))?;
+    let encrypted_secret_key = locally_encrypted_secret_key.unlock_slice(|encrypted| {
+        encrypt_with_registration_public_key(&request.public_key, encrypted)
+    })?;
 
     let registration_json = serde_json::to_vec(&request)
         .map_err(|err| ApiError::internal(format!("failed to serialize registration: {err}")))?;
     let encrypted_registration =
         key_store::encrypt_aes256_gcm(&state.local_key, &registration_json)?;
 
-    let device_uuid = Uuid::new_v4().to_string();
     key_store::store_android_device_registration(
-        &device_uuid,
+        &request.device_uuid,
         &encrypted_registration,
         &encrypted_secret_key,
     )
@@ -205,7 +206,7 @@ async fn register(
 
     info!(
         "Registered Android device {} at device-keys/android/{}",
-        request.device.model, device_uuid
+        request.device.model, request.device_uuid
     );
 
     Ok(StatusCode::NO_CONTENT)
@@ -244,7 +245,7 @@ fn validate_public_key_info(public_key: &PublicKeyInfo) -> std::result::Result<(
 fn encrypt_with_registration_public_key(
     public_key: &PublicKeyInfo,
     plaintext: &[u8],
-) -> std::result::Result<Vec<u8>, ApiError> {
+) -> std::result::Result<SecureBlob, ApiError> {
     let public_key_der = BASE64
         .decode(&public_key.value_b64)
         .map_err(|_| ApiError::bad_request("public_key.value_b64 is not valid base64"))?;
@@ -254,6 +255,7 @@ fn encrypt_with_registration_public_key(
     public_key
         .encrypt(&mut OsRng, Oaep::new::<Sha256>(), plaintext)
         .map_err(|err| ApiError::bad_request(format!("RSA-OAEP-256 encryption failed: {err}")))
+        .and_then(|encrypted| key_store::secure_blob_from_vec(encrypted).map_err(ApiError::from))
 }
 
 #[cfg(test)]
@@ -284,6 +286,7 @@ mod tests {
     fn register_request_parses_expected_payload() {
         let payload = r#"{
             "schema_version": 1,
+            "device_uuid": "f2018f87-e926-42a1-8b48-9ad4b7fd7cde",
             "keychain": {
               "domain": "example.com",
               "port": 443
@@ -320,6 +323,7 @@ mod tests {
 
         let request: RegisterRequest = serde_json::from_str(payload).unwrap();
         assert_eq!(request.schema_version, 1);
+        assert_eq!(request.device_uuid, "f2018f87-e926-42a1-8b48-9ad4b7fd7cde");
         assert_eq!(
             request.initialisation_token.as_deref(),
             Some("optional-token")
@@ -332,6 +336,7 @@ mod tests {
         let payload = r#"{
             "schema_version": 1,
             "request_uuid": "6fbbce84-5aef-43c3-8cc7-469cbfd83109",
+            "device_uuid": "f2018f87-e926-42a1-8b48-9ad4b7fd7cde",
             "keychain": {
               "domain": "example.com",
               "port": 443
@@ -348,6 +353,7 @@ mod tests {
         let request: AuthenticateRequest = serde_json::from_str(payload).unwrap();
         assert_eq!(request.schema_version, 1);
         assert_eq!(request.request_uuid, "6fbbce84-5aef-43c3-8cc7-469cbfd83109");
+        assert_eq!(request.device_uuid, "f2018f87-e926-42a1-8b48-9ad4b7fd7cde");
         assert_eq!(request.decrypted_blob_b64, "base64-decrypted-blob");
     }
 }

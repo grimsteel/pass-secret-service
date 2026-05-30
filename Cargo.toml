@@ -27,13 +27,13 @@ qrcode = { version = "0.14.1", default-features = false }
 redb = "2.1.1"
 rsa = { version = "0.9.10", features = ["sha2"] }
 schemars = "0.8.22"
+secure-types = { version = "0.2.40", features = ["serde"] }
 serde = "1.0.204"
 serde_json = "1.0.145"
 sha2 = "0.10.9"
 sysinfo = { version = "0.38.0", default-features = false, features = ["system"] }
 thiserror = "2.0.12"
 tokio = { version = "1.38.1", features = ["fs", "rt", "rt-multi-thread", "macros", "net", "process", "sync"] }
-uuid = { version = "1.23.2", features = ["v4"] }
 zbus = { version = "4.3.1", default-features = false, features = ["tokio"] }
 
 [profile.release]
