@@ -99,16 +99,48 @@ fn write_private_secure_file(path: &Path, contents: &SecureBlob) -> Result {
 }
 
 async fn read_or_create_local_key(path: &Path) -> Result<SecureKey> {
-    match read(path).await {
-        Ok(bytes) => secure_key_from_vec(bytes),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            let mut key = [0u8; AES256_KEY_BYTES];
-            OsRng.fill_bytes(&mut key);
-            write_private_file(path, &key).await?;
-            secure_key_from_array(key)
+    if let Ok(cred_dir) = std::env::var("CREDENTIALS_DIRECTORY") {
+        let cred_path = Path::new(&cred_dir).join("local_key.bin");
+        if cred_path.exists() {
+            match read(&cred_path).await {
+                Ok(bytes) => return secure_key_from_vec(bytes),
+                Err(e) => {
+                    log::warn!("Failed to read credential from systemd path {:?}: {}", cred_path, e);
+                }
+            }
         }
-        Err(e) => Err(e.into()),
     }
+
+    // Generate a new local key inside a SecureKey type
+    let mut key = [0u8; AES256_KEY_BYTES];
+    OsRng.fill_bytes(&mut key);
+    let secure_key = secure_key_from_array(key)?;
+
+    // Encrypt the new key using systemd-creds by piping to stdin
+    let mut child = std::process::Command::new("systemd-creds")
+        .args(["encrypt", "--name=local_key.bin", "-", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|_| Error::EncryptionError("failed to spawn systemd-creds"))?;
+
+    secure_key.unlock(|key_bytes| {
+        if let Some(stdin) = child.stdin.as_mut() {
+            stdin.write_all(key_bytes).map_err(|_| Error::EncryptionError("failed to write key to systemd-creds stdin"))?;
+        }
+        Ok::<(), Error>(())
+    })?;
+
+    let output = child.wait_with_output().map_err(|_| Error::EncryptionError("failed to wait for systemd-creds"))?;
+    if !output.status.success() {
+        return Err(Error::EncryptionError("systemd-creds encryption failed"));
+    }
+
+    // Write the encrypted output from stdout to the target path
+    write_private_file(path, &output.stdout).await?;
+
+    Ok(secure_key)
 }
 
 async fn has_existing_pairing_keys(key_dir: &Path) -> Result<bool> {
@@ -424,5 +456,33 @@ mod tests {
     #[test]
     fn pairing_token_rejects_bad_format() {
         assert!(parse_pairing_token("alohomora-not-valid").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_read_or_create_local_key_systemd_creds() {
+        let temp_file = std::env::temp_dir().join(format!("test_local_key_{}.bin", nanoid::nanoid!()));
+
+        // 1. Generate local key (which will encrypt it using systemd-creds)
+        match super::read_or_create_local_key(&temp_file).await {
+            Ok(key) => {
+                assert!(temp_file.exists());
+
+                // 2. Read it back using systemd-creds decrypt to verify it works
+                let output = std::process::Command::new("systemd-creds")
+                    .args(["decrypt", "--name=local_key.bin", temp_file.to_str().unwrap(), "-"])
+                    .output()
+                    .unwrap();
+                assert!(output.status.success());
+                key.unlock(|key_bytes| {
+                    assert_eq!(output.stdout, key_bytes);
+                });
+
+                // 3. Clean up
+                let _ = std::fs::remove_file(temp_file);
+            }
+            Err(e) => {
+                println!("Skipping test: systemd-creds not fully configured or lacks permissions on this host: {:?}", e);
+            }
+        }
     }
 }
