@@ -13,11 +13,13 @@ use pass::PasswordStore;
 use zbus::{zvariant::Optional, Connection};
 
 use crate::{
+    auth_gate::AuthGate,
     cli::{CliSubcommand, LastAccessorSubcommand},
     dbus_server::{service::DEFAULT_COLLECTION_NAME, SecretAccessor},
     error::Result,
 };
 
+mod auth_gate;
 mod cli;
 mod config;
 mod dbus_server;
@@ -39,11 +41,12 @@ async fn run(args: CliArgs) -> Result {
             let config = config::AppConfig::from_env()?;
             let startup_keys = key_store::initialize(&config).await?;
             let symmetric_gpg_passphrase = key_store::key_to_passphrase(&startup_keys.local_key);
+            let auth_gate = AuthGate::new(&config, startup_keys.local_key);
             let pass = Box::leak(Box::new(PasswordStore::from_env(
                 args.password_store_dir.map(|d| d.into()),
                 symmetric_gpg_passphrase,
             )?));
-            let _http_server = http_server::spawn(config, startup_keys.local_key).await?;
+            let _http_server = http_server::spawn(config, auth_gate.clone()).await?;
 
             let connection = Connection::session().await?;
 
@@ -55,6 +58,7 @@ async fn run(args: CliArgs) -> Result {
             let service = Service::init(
                 connection.clone(),
                 pass,
+                auth_gate,
                 args.forget_password_on_lock,
                 args.notify_on_access,
             )

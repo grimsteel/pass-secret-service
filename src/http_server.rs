@@ -16,9 +16,10 @@ use serde::{Deserialize, Serialize};
 use tokio::{net::TcpListener, task::JoinHandle};
 
 use crate::{
+    auth_gate::AuthGate,
     config::AppConfig,
     error::{Error, Result},
-    key_store::{self, SecureBlob, SecureKey},
+    key_store::{self, SecureBlob},
 };
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -99,7 +100,7 @@ pub struct AuthenticateRequest {
 
 #[derive(Clone)]
 struct ApiState {
-    local_key: SecureKey,
+    auth_gate: AuthGate,
 }
 
 #[derive(Debug)]
@@ -139,7 +140,7 @@ impl From<Error> for ApiError {
     }
 }
 
-pub async fn spawn(config: AppConfig, local_key: SecureKey) -> Result<JoinHandle<()>> {
+pub async fn spawn(config: AppConfig, auth_gate: AuthGate) -> Result<JoinHandle<()>> {
     let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.internal_port));
     let listener = TcpListener::bind(addr).await?;
     info!(
@@ -150,7 +151,7 @@ pub async fn spawn(config: AppConfig, local_key: SecureKey) -> Result<JoinHandle
     let app = Router::new()
         .route("/register", post(register))
         .route("/authenticate", post(authenticate))
-        .with_state(ApiState { local_key });
+        .with_state(ApiState { auth_gate });
 
     Ok(tokio::spawn(async move {
         if let Err(err) = axum::serve(listener, app).await {
@@ -185,9 +186,10 @@ async fn register(
     validate_public_key_info(&request.public_key)?;
 
     let secret_key =
-        key_store::read_temp_secret_key(initialisation_token, &state.local_key).await?;
-    let locally_encrypted_secret_key = secret_key
-        .unlock(|secret_key| key_store::encrypt_aes256_gcm(&state.local_key, secret_key))?;
+        key_store::read_temp_secret_key(initialisation_token, state.auth_gate.local_key()).await?;
+    let locally_encrypted_secret_key = secret_key.unlock(|secret_key| {
+        key_store::encrypt_aes256_gcm(state.auth_gate.local_key(), secret_key)
+    })?;
     let encrypted_secret_key = locally_encrypted_secret_key.unlock_slice(|encrypted| {
         encrypt_with_registration_public_key(&request.public_key, encrypted)
     })?;
@@ -195,7 +197,7 @@ async fn register(
     let registration_json = serde_json::to_vec(&request)
         .map_err(|err| ApiError::internal(format!("failed to serialize registration: {err}")))?;
     let encrypted_registration =
-        key_store::encrypt_aes256_gcm(&state.local_key, &registration_json)?;
+        key_store::encrypt_aes256_gcm(state.auth_gate.local_key(), &registration_json)?;
 
     key_store::store_android_device_registration(
         &request.device_uuid,
@@ -212,12 +214,19 @@ async fn register(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn authenticate(Json(request): Json<AuthenticateRequest>) -> StatusCode {
+async fn authenticate(
+    State(state): State<ApiState>,
+    Json(request): Json<AuthenticateRequest>,
+) -> std::result::Result<StatusCode, ApiError> {
     debug!(
-        "Received authentication approval for request {} from {}",
-        request.request_uuid, request.app.package_name
+        "Received authentication approval for request {} from {} on device {}",
+        request.request_uuid, request.app.package_name, request.device_uuid
     );
-    StatusCode::NO_CONTENT
+    state
+        .auth_gate
+        .complete_authentication(&request.request_uuid, &request.decrypted_blob_b64)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn validate_public_key_info(public_key: &PublicKeyInfo) -> std::result::Result<(), ApiError> {

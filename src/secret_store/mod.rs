@@ -9,7 +9,7 @@ use std::{
 use async_trait::async_trait;
 use dyn_clone::DynClone;
 
-use crate::{error::Result, pass::PasswordStore};
+use crate::{error::Result, key_store::SecureKey, pass::PasswordStore};
 
 pub mod redb;
 mod redb_imps;
@@ -88,6 +88,12 @@ pub trait SecretStore<'a>: Debug + DynClone {
         collection_id: &str,
         secret_id: &str,
         can_prompt: bool,
+    ) -> Result<Vec<u8>>;
+    async fn read_secret_with_key(
+        &self,
+        collection_id: &str,
+        secret_id: &str,
+        key: &SecureKey,
     ) -> Result<Vec<u8>>;
     async fn read_secret_attrs(
         &self,

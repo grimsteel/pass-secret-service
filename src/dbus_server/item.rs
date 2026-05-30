@@ -16,8 +16,10 @@ use zbus::{
 };
 
 use crate::{
+    auth_gate::AuthGate,
     dbus_server::collection::Collection,
     error::{Error, Result},
+    key_store::SecureKey,
     secret_store::SecretStore,
 };
 
@@ -149,6 +151,7 @@ pub struct Item<'a> {
     pub collection_id: Arc<String>,
     pub id: Arc<String>,
     pub store: Box<dyn SecretStore<'a> + Send + Sync>,
+    pub auth_gate: AuthGate,
     pub last_access: Arc<RwLock<Option<SecretAccessor<'static>>>>,
     pub notify_on_access: bool,
 }
@@ -175,6 +178,24 @@ impl<'a> Item<'a> {
         session: &InterfaceDeref<'_, Session>,
         connection: &Connection,
     ) -> Result<Secret> {
+        let access_info = access_info_from_header(header, connection).await?;
+        let secret_key = self
+            .auth_gate
+            .request_secret_key(access_info.as_ref())
+            .await?;
+
+        self.read_with_session_and_key(header, session, connection, &secret_key, access_info)
+            .await
+    }
+
+    pub async fn read_with_session_and_key(
+        &self,
+        header: &Header<'_>,
+        session: &InterfaceDeref<'_, Session>,
+        connection: &Connection,
+        secret_key: &SecureKey,
+        access_info: Option<SecretAccessor<'static>>,
+    ) -> Result<Secret> {
         debug!(
             "Fetching secret {}/{} for {}",
             self.collection_id,
@@ -187,15 +208,8 @@ impl<'a> Item<'a> {
 
         let secret_value = self
             .store
-            .read_secret(&*self.collection_id, &*self.id, true)
+            .read_secret_with_key(&*self.collection_id, &*self.id, secret_key)
             .await?;
-
-        // update fetch access info
-        let access_info = if let Some(id) = header.sender() {
-            Some(SecretAccessor::from_dbus_name(connection, id).await?)
-        } else {
-            None
-        };
 
         // send desktop notification if enabled
         if self.notify_on_access {
@@ -210,6 +224,17 @@ impl<'a> Item<'a> {
         *self.last_access.write().await = access_info;
 
         session.encrypt(secret_value, header)
+    }
+}
+
+pub(crate) async fn access_info_from_header(
+    header: &Header<'_>,
+    connection: &Connection,
+) -> Result<Option<SecretAccessor<'static>>> {
+    if let Some(id) = header.sender() {
+        Ok(Some(SecretAccessor::from_dbus_name(connection, id).await?))
+    } else {
+        Ok(None)
     }
 }
 

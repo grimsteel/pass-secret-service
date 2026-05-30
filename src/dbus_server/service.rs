@@ -16,6 +16,7 @@ use zbus::{
 };
 
 use crate::{
+    auth_gate::AuthGate,
     dbus_server::secret_transfer::{DhIetf1024Sha256Aes128CbcPkcs7Transfer, SessionTransfer},
     error::{Error, OptionNoneNotFound, Result},
     pass::PasswordStore,
@@ -26,7 +27,7 @@ use crate::{
 
 use super::{
     collection::Collection,
-    item::Item,
+    item::{access_info_from_header, Item},
     secret_transfer::{PlainTextTransfer, Secret},
     session::Session,
     utils::{
@@ -41,6 +42,7 @@ pub const DEFAULT_COLLECTION_NAME: &'static str = "default";
 #[derive(Debug)]
 pub struct Service<'a> {
     store: Box<dyn SecretStore<'a> + Send + Sync>,
+    auth_gate: AuthGate,
     forget_password_on_lock: bool,
     notify_on_access: bool,
 }
@@ -49,6 +51,7 @@ impl Service<'static> {
     pub async fn init(
         connection: Connection,
         pass: &'static PasswordStore,
+        auth_gate: AuthGate,
         forget_password_on_lock: bool,
         notify_on_access: bool,
     ) -> Result<Self> {
@@ -80,6 +83,7 @@ impl Service<'static> {
                     .into_iter()
                     .map(|id| Item {
                         store: store.clone(),
+                        auth_gate: auth_gate.clone(),
                         id: Arc::new(id),
                         collection_id: collection_id.clone(),
                         last_access: Default::default(),
@@ -97,6 +101,7 @@ impl Service<'static> {
                 let c = Collection {
                     store: store.clone(),
                     id: collection_id,
+                    auth_gate: auth_gate.clone(),
                     notify_on_access,
                 };
 
@@ -119,6 +124,7 @@ impl Service<'static> {
 
         Ok(Service {
             store,
+            auth_gate,
             forget_password_on_lock,
             notify_on_access,
         })
@@ -128,6 +134,7 @@ impl Service<'static> {
         Collection {
             id: Arc::new(name),
             store: clone_box(self.store.as_ref()),
+            auth_gate: self.auth_gate.clone(),
             notify_on_access: self.notify_on_access,
         }
     }
@@ -326,6 +333,14 @@ impl Service<'static> {
         let session_ref = try_interface(object_server.interface::<_, Session>(&session).await)?
             .ok_or(Error::InvalidSession)?;
         let session = session_ref.get().await;
+        if items.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let access_info = access_info_from_header(&header, connection).await?;
+        let secret_key = self
+            .auth_gate
+            .request_secret_key(access_info.as_ref())
+            .await?;
 
         let mut results = HashMap::with_capacity(items.len());
 
@@ -335,7 +350,13 @@ impl Service<'static> {
             let secret = item_ref
                 .get()
                 .await
-                .read_with_session(&header, &session, connection)
+                .read_with_session_and_key(
+                    &header,
+                    &session,
+                    connection,
+                    &secret_key,
+                    access_info.clone(),
+                )
                 .await?;
             results.insert(item_path.into(), secret);
         }

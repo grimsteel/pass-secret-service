@@ -9,6 +9,7 @@ use tokio::{sync::RwLock, task::spawn_blocking};
 
 use crate::{
     error::{raise_nonexistent_table, IntoResult, OptionNoneNotFound, Result},
+    key_store::SecureKey,
     pass::PasswordStore,
     secret_store::{redb_imps::RedbHashMap, slugify, SecretStore, NANOID_ALPHABET, PASS_SUBDIR},
 };
@@ -477,6 +478,17 @@ impl<'a> SecretStore<'a> for RedbSecretStore<'a> {
         let secret_path = Path::new(PASS_SUBDIR).join(collection_id).join(secret_id);
 
         Ok(self.pass.read_password(secret_path, can_prompt).await?)
+    }
+
+    async fn read_secret_with_key(
+        &self,
+        collection_id: &str,
+        secret_id: &str,
+        key: &SecureKey,
+    ) -> Result<Vec<u8>> {
+        let secret_path = Path::new(PASS_SUBDIR).join(collection_id).join(secret_id);
+
+        Ok(self.pass.read_password_with_key(secret_path, key).await?)
     }
 
     /// read the attributes for the given secret

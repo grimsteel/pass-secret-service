@@ -16,7 +16,10 @@ use tokio::{
     process::Command,
 };
 
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    key_store::{self, SecureKey},
+};
 
 pub struct PasswordStore {
     pub directory: PathBuf,
@@ -105,7 +108,14 @@ impl PasswordStore {
     }
 
     fn add_symmetric_passphrase_args<'a>(&self, command: &'a mut Command) -> &'a mut Command {
-        self.symmetric_gpg_passphrase.unlock_str(|passphrase| {
+        Self::add_symmetric_passphrase_args_with(command, &self.symmetric_gpg_passphrase)
+    }
+
+    fn add_symmetric_passphrase_args_with<'a>(
+        command: &'a mut Command,
+        passphrase: &SecureString,
+    ) -> &'a mut Command {
+        passphrase.unlock_str(|passphrase| {
             command
                 .arg("--batch")
                 .arg("--yes")
@@ -123,11 +133,29 @@ impl PasswordStore {
         path: impl AsRef<Path>,
         _can_prompt: bool,
     ) -> Result<Vec<u8>> {
+        self.read_password_with_passphrase(path, &self.symmetric_gpg_passphrase)
+            .await
+    }
+
+    pub async fn read_password_with_key(
+        &self,
+        path: impl AsRef<Path>,
+        key: &SecureKey,
+    ) -> Result<Vec<u8>> {
+        let passphrase = key_store::key_to_passphrase(key);
+        self.read_password_with_passphrase(path, &passphrase).await
+    }
+
+    async fn read_password_with_passphrase(
+        &self,
+        path: impl AsRef<Path>,
+        passphrase: &SecureString,
+    ) -> Result<Vec<u8>> {
         let contents = read(self.get_full_secret_path(path)).await?;
 
         let mut command = self.make_gpg_process();
 
-        self.add_symmetric_passphrase_args(&mut command);
+        Self::add_symmetric_passphrase_args_with(&mut command, passphrase);
 
         command.arg("--decrypt").arg("-");
 

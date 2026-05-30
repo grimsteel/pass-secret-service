@@ -11,6 +11,7 @@ use zbus::{
 };
 
 use crate::{
+    auth_gate::AuthGate,
     dbus_server::secret_transfer::Secret,
     error::{Error, Result},
     secret_store::SecretStore,
@@ -29,6 +30,7 @@ use super::{
 pub struct Collection<'a> {
     pub store: Box<dyn SecretStore<'a> + Send + Sync>,
     pub id: Arc<String>,
+    pub auth_gate: AuthGate,
     pub notify_on_access: bool,
 }
 
@@ -38,6 +40,7 @@ impl<'a> Collection<'a> {
             id: Arc::new(id),
             collection_id: self.id.clone(),
             store: clone_box(self.store.as_ref()),
+            auth_gate: self.auth_gate.clone(),
             last_access: Default::default(),
             notify_on_access: self.notify_on_access,
         }

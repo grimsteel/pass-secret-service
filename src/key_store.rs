@@ -46,6 +46,11 @@ pub struct StartupKeys {
     pub local_key: SecureKey,
 }
 
+pub struct AndroidDeviceAuthBlob {
+    pub device_uuid: String,
+    pub encrypted_secret_key: SecureBlob,
+}
+
 pub async fn initialize(config: &AppConfig) -> Result<StartupKeys> {
     let key_dir = Path::new(KEY_DIR);
     ensure_private_dir(key_dir).await?;
@@ -327,6 +332,39 @@ pub async fn store_android_device_registration(
     )?;
     write_private_secure_file(&device_dir.join(ENC_SECRET_KEY_FILE), encrypted_secret_key)?;
     Ok(())
+}
+
+pub async fn list_android_device_auth_blobs() -> Result<Vec<AndroidDeviceAuthBlob>> {
+    let android_dir = Path::new(KEY_DIR)
+        .join(DEVICE_KEYS_DIR)
+        .join(ANDROID_DEVICE_KEYS_DIR);
+    let mut entries = match read_dir(android_dir).await {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+    let mut devices = Vec::new();
+
+    while let Some(entry) = entries.next_entry().await? {
+        if !entry.file_type().await?.is_dir() {
+            continue;
+        }
+
+        let device_uuid = entry.file_name().to_string_lossy().into_owned();
+        let encrypted_secret_key_path = entry.path().join(ENC_SECRET_KEY_FILE);
+        let encrypted_secret_key = match read(encrypted_secret_key_path).await {
+            Ok(bytes) => secure_blob_from_vec(bytes)?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e.into()),
+        };
+
+        devices.push(AndroidDeviceAuthBlob {
+            device_uuid,
+            encrypted_secret_key,
+        });
+    }
+
+    Ok(devices)
 }
 
 fn temp_pairing_key_dir(key_dir: &Path, token_id: &str) -> PathBuf {
