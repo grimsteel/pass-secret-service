@@ -23,3 +23,82 @@ cargo build --release
 ```
 
 A systemd user unit and a D-Bus session activation file are located in the `systemd` directory
+
+## Usage
+
+```
+Usage: pass-secret-service [-d <path>] [-f] [-n] [-V] [--log-level <log-level>] [<command>] [<args>]
+
+Background daemon for pass-secret-service: An implementation of org.freedesktop.secrets using pass
+
+Options:
+  -d, --path        location of the password store. Will fall back to
+                    $PASSWORD_STORE_DIR, or $HOME/.password-store if not set.
+  -f, --forget-password-on-lock
+                    make gpg-agent forget the cached key password when any
+                    collection is locked
+  -n, --notify-on-access
+                    send a desktop notification via org.freedesktop.Notifications
+                    whenever a secret is accessed
+  -V, --version     print the current version
+  --log-level       log level (overridden by $RUST_LOG environment variable)
+                    uses env_logger syntax
+  --help, help      display usage information
+
+Commands:
+  run-service       Run the secret-service provider
+  last-accessor     Retrieve the last application to access the specified secret
+```
+
+The subcommand is optional; ommitting it defaults to `run-service`.
+
+### Access notifications (`--notify-on-access`)
+
+Pass `-n` / `--notify-on-access` to send a desktop notification via `org.freedesktop.Notifications` every time a secret value is read. Each notification includes the secret label, the accessing application name, its PID, and UID.
+
+```sh
+pass-secret-service -n
+pass-secret-service run-service --notify-on-access
+```
+
+With systemd D-Bus activation, this can be configured with a drop in:
+```sh
+systemctl --user edit pass-secret-service.service
+```
+
+```toml
+[Service]
+ExecStart=
+ExecStart=/usr/bin/pass-secret-service -n
+```
+
+### Getting the last secret accessor (#20)
+
+The service stores information about the last accessor for each secret in memory.
+
+Whenever a process requests a secret (not attributes/other metadata), the PID, UID, and program name are stored.
+
+These can be retrieved with the `last-accessor` subcommand with the secret ID:
+
+```
+Usage: pass-secret-service last-accessor <id> [-C <collection>] [-A <alias>]
+
+Retrieve the last application to access the specified secret
+
+Positional Arguments:
+  id                the secret ID. use `secret-tool search` to find
+
+Options:
+  -C, --collection  the collection of the secret. Takes precedence over --alias
+  -A, --alias       the collection alias of the secret. `default` if neither
+                    this nor --collection is given.
+  --help, help      display usage information
+```
+
+**Example output**:
+```
+[INFO  pass_secret_service] The last access of collection/default/abcd123 was 15m 41s ago:
+[INFO  pass_secret_service]   User: 1000
+[INFO  pass_secret_service]   Program: gh (PID 123456)
+[INFO  pass_secret_service]   Timestamp: Sun, 1 Jan 2026 01:23:45
+```

@@ -35,10 +35,14 @@ use super::{
     },
 };
 
+/// Default name of the initially created collection and alias
+pub const DEFAULT_COLLECTION_NAME: &'static str = "default";
+
 #[derive(Debug)]
 pub struct Service<'a> {
     store: Box<dyn SecretStore<'a> + Send + Sync>,
     forget_password_on_lock: bool,
+    notify_on_access: bool,
 }
 
 impl Service<'static> {
@@ -46,6 +50,7 @@ impl Service<'static> {
         connection: Connection,
         pass: &'static PasswordStore,
         forget_password_on_lock: bool,
+        notify_on_access: bool,
     ) -> Result<Self> {
         let store = Box::new(RedbSecretStore::new(pass).await?);
 
@@ -55,11 +60,11 @@ impl Service<'static> {
             let mut aliases = store.list_all_aliases().await?;
 
             // initialize the default store if necessary
-            if !aliases.contains_key("default") {
+            if !aliases.contains_key(DEFAULT_COLLECTION_NAME) {
                 let id = store
-                    .create_collection(Some("Default".into()), Some("default".into()))
+                    .create_collection(Some("Default".into()), Some(DEFAULT_COLLECTION_NAME.into()))
                     .await?;
-                aliases.insert(id, vec!["default".into()]);
+                aliases.insert(id, vec![DEFAULT_COLLECTION_NAME.into()]);
             }
 
             // add existing collections
@@ -77,6 +82,8 @@ impl Service<'static> {
                         store: store.clone(),
                         id: Arc::new(id),
                         collection_id: collection_id.clone(),
+                        last_access: Default::default(),
+                        notify_on_access,
                     })
                     .collect();
 
@@ -90,6 +97,7 @@ impl Service<'static> {
                 let c = Collection {
                     store: store.clone(),
                     id: collection_id,
+                    notify_on_access,
                 };
 
                 // add the aliases
@@ -112,6 +120,7 @@ impl Service<'static> {
         Ok(Service {
             store,
             forget_password_on_lock,
+            notify_on_access,
         })
     }
 
@@ -119,6 +128,7 @@ impl Service<'static> {
         Collection {
             id: Arc::new(name),
             store: clone_box(self.store.as_ref()),
+            notify_on_access: self.notify_on_access,
         }
     }
 }
@@ -297,7 +307,10 @@ impl Service<'static> {
         Ok((vec![], EMPTY_PATH))
     }
 
-    async fn unlock(&'_ self, objects: Vec<OwnedObjectPath>) -> (Vec<OwnedObjectPath>, ObjectPath<'_>) {
+    async fn unlock(
+        &'_ self,
+        objects: Vec<OwnedObjectPath>,
+    ) -> (Vec<OwnedObjectPath>, ObjectPath<'_>) {
         // we don't support locking - just say all of them were unlocked
         (objects, EMPTY_PATH)
     }
@@ -308,6 +321,7 @@ impl Service<'static> {
         session: ObjectPath<'_>,
         #[zbus(object_server)] object_server: &ObjectServer,
         #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
     ) -> Result<HashMap<OwnedObjectPath, Secret>> {
         let session_ref = try_interface(object_server.interface::<_, Session>(&session).await)?
             .ok_or(Error::InvalidSession)?;
@@ -321,7 +335,7 @@ impl Service<'static> {
             let secret = item_ref
                 .get()
                 .await
-                .read_with_session(&header, &session)
+                .read_with_session(&header, &session, connection)
                 .await?;
             results.insert(item_path.into(), secret);
         }
