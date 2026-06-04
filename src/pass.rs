@@ -59,10 +59,14 @@ impl PasswordStore {
             file_mode,
         })
     }
-    
+
     pub fn get_full_filepath(&self, path: impl AsRef<Path>, extension: &str) -> PathBuf {
         let mut path = self.directory.join(path);
-        if path.extension().and_then(|s| s.to_str()).is_none_or(|s| s != extension) {
+        if path
+            .extension()
+            .and_then(|s| s.to_str())
+            .is_none_or(|s| s != extension)
+        {
             path.add_extension(extension);
         }
 
