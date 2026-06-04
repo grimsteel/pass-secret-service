@@ -1,3 +1,5 @@
+mod value_imp;
+
 use std::{borrow::Cow, collections::HashMap, fmt::Debug, fs::Metadata, io, path::Path, sync::Arc};
 
 use async_trait::async_trait;
@@ -10,7 +12,7 @@ use tokio::{sync::RwLock, task::spawn_blocking};
 use crate::{
     error::{raise_nonexistent_table, IntoResult, OptionNoneNotFound, Result},
     pass::PasswordStore,
-    secret_store::{redb_imps::RedbHashMap, slugify, SecretStore, NANOID_ALPHABET, PASS_SUBDIR},
+    secret_store::{redb::value_imp::RedbHashMap, slugify, SecretStore, NANOID_ALPHABET, PASS_SUBDIR},
 };
 
 // Collection tables
