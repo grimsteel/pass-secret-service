@@ -10,9 +10,15 @@ use argh::FromArgValue;
 use async_trait::async_trait;
 use dyn_clone::DynClone;
 
-use crate::{error::Result, pass::PasswordStore, secret_store::{json::JsonSecretStore, redb::RedbSecretStore}};
+use crate::{
+    error::Result,
+    pass::PasswordStore,
+    secret_store::{json::JsonSecretStore, redb::RedbSecretStore},
+};
+pub use migration::migrate_redb_to_json;
 
 pub mod json;
+mod migration;
 pub mod redb;
 
 pub const PASS_SUBDIR: &'static str = "secret-service";
@@ -49,13 +55,18 @@ async fn select_store(pass: &PasswordStore) -> Result<StoreType> {
 }
 
 /// Initialize the secret store, using the store type if given. Otherwise, uses the default store type
-pub async fn init_store<'a>(pass: &'a PasswordStore, force_type: Option<StoreType>) -> Result<Box<dyn SecretStore<'a> + 'a>> {
-    let store_type = if let Some(store_type) = force_type { store_type } else {
+pub async fn init_store<'a>(
+    pass: &'a PasswordStore,
+    force_type: Option<StoreType>,
+) -> Result<Box<dyn SecretStore<'a> + 'a>> {
+    let store_type = if let Some(store_type) = force_type {
+        store_type
+    } else {
         select_store(pass).await?
     };
     Ok(match store_type {
         StoreType::Json => Box::new(JsonSecretStore::new(pass).await?),
-        StoreType::Redb => Box::new(RedbSecretStore::new(pass).await?)
+        StoreType::Redb => Box::new(RedbSecretStore::new(pass).await?),
     })
 }
 

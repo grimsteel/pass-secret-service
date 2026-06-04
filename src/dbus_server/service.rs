@@ -20,7 +20,7 @@ use crate::{
     error::{Error, OptionNoneNotFound, Result},
     pass::PasswordStore,
     secret_store::{
-        NANOID_ALPHABET, SecretStore, StoreType, get_collection_dir, init_store, slugify
+        get_collection_dir, init_store, slugify, SecretStore, StoreType, NANOID_ALPHABET,
     },
 };
 

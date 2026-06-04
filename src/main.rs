@@ -16,6 +16,7 @@ use crate::{
     cli::{CliSubcommand, LastAccessorSubcommand},
     dbus_server::{service::DEFAULT_COLLECTION_NAME, SecretAccessor},
     error::Result,
+    secret_store::migrate_redb_to_json,
 };
 
 mod cli;
@@ -49,7 +50,7 @@ async fn run(args: CliArgs) -> Result {
                 pass,
                 args.forget_password_on_lock,
                 args.notify_on_access,
-                args.store_type
+                args.store_type,
             )
             .await?;
 
@@ -150,6 +151,14 @@ async fn run(args: CliArgs) -> Result {
                 }
             };
 
+            Ok(())
+        }
+        Some(CliSubcommand::MigrateToJson(_)) => {
+            let pass = PasswordStore::from_env(args.password_store_dir.map(|d| d.into()))?;
+
+            info!("Starting migration from REDB to JSON store...");
+            migrate_redb_to_json(&pass).await?;
+            info!("Migration complete. REDB files have been preserved and can be manually deleted if desired.");
             Ok(())
         }
     }

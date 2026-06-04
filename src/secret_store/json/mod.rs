@@ -1,5 +1,5 @@
-mod json_file;
-mod schema;
+pub(super) mod json_file;
+pub(super) mod schema;
 
 use std::{
     borrow::Cow,

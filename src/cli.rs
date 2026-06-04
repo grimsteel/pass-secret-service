@@ -40,6 +40,7 @@ pub struct CliArgs {
 pub enum CliSubcommand {
     RunService(RunServiceSubcommand),
     LastAccessor(LastAccessorSubcommand),
+    MigrateToJson(MigrateToJsonSubcommand),
 }
 
 #[derive(FromArgs)]

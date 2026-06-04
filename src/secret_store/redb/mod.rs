@@ -12,23 +12,25 @@ use tokio::{sync::RwLock, task::spawn_blocking};
 use crate::{
     error::{raise_nonexistent_table, IntoResult, OptionNoneNotFound, Result},
     pass::PasswordStore,
-    secret_store::{redb::value_imp::RedbHashMap, slugify, SecretStore, NANOID_ALPHABET, PASS_SUBDIR},
+    secret_store::{
+        redb::value_imp::RedbHashMap, slugify, SecretStore, NANOID_ALPHABET, PASS_SUBDIR,
+    },
 };
 
 // Collection tables
 
 // (key, value) --> secrets
-const ATTRIBUTES_TABLE: MultimapTableDefinition<(&str, &str), &str> =
+pub(super) const ATTRIBUTES_TABLE: MultimapTableDefinition<(&str, &str), &str> =
     MultimapTableDefinition::new("attributes");
-const ATTRIBUTES_TABLE_REVERSE: TableDefinition<&str, RedbHashMap<&str, &str>> =
+pub(super) const ATTRIBUTES_TABLE_REVERSE: TableDefinition<&str, RedbHashMap<&str, &str>> =
     TableDefinition::new("attributes-reverse");
 
 // collection id --> label
-const LABELS_TABLE: TableDefinition<&str, &str> = TableDefinition::new("labels");
+pub(super) const LABELS_TABLE: TableDefinition<&str, &str> = TableDefinition::new("labels");
 // collection alias -> id
-const ALIASES_TABLE: TableDefinition<&str, &str> = TableDefinition::new("aliases");
+pub(super) const ALIASES_TABLE: TableDefinition<&str, &str> = TableDefinition::new("aliases");
 // id -> alises
-const ALIASES_TABLE_REVERSE: MultimapTableDefinition<&str, &str> =
+pub(super) const ALIASES_TABLE_REVERSE: MultimapTableDefinition<&str, &str> =
     MultimapTableDefinition::new("aliases_reverse");
 
 const ATTRIBUTES_DB: &'static str = "attributes.redb";
@@ -92,8 +94,8 @@ pub fn search_collection(attrs: &HashMap<String, String>, db: &Database) -> Resu
 #[derive(Debug, Clone)]
 pub struct RedbSecretStore<'a> {
     pub pass: &'a PasswordStore,
-    collection_dbs: Arc<RwLock<HashMap<String, Database>>>,
-    db: Arc<Database>,
+    pub(super) collection_dbs: Arc<RwLock<HashMap<String, Database>>>,
+    pub(super) db: Arc<Database>,
 }
 
 impl<'a> RedbSecretStore<'a> {
