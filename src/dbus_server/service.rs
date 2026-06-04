@@ -20,7 +20,7 @@ use crate::{
     error::{Error, OptionNoneNotFound, Result},
     pass::PasswordStore,
     secret_store::{
-        get_collection_dir, redb::RedbSecretStore, slugify, SecretStore, NANOID_ALPHABET,
+        NANOID_ALPHABET, PASS_SUBDIR, SecretStore, StoreType, get_collection_dir, init_store, json::JsonSecretStore, redb::RedbSecretStore, slugify
     },
 };
 
@@ -52,7 +52,8 @@ impl Service<'static> {
         forget_password_on_lock: bool,
         notify_on_access: bool,
     ) -> Result<Self> {
-        let store = Box::new(RedbSecretStore::new(pass).await?);
+        // Init the store (select default if needed)
+        let store = init_store(pass, force_type).await?;
 
         {
             let object_server = connection.object_server();

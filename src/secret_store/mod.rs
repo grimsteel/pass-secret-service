@@ -9,11 +9,11 @@ use std::{
 use async_trait::async_trait;
 use dyn_clone::DynClone;
 
-use crate::{error::Result, pass::PasswordStore};
+use crate::{error::Result, pass::PasswordStore, secret_store::{json::JsonSecretStore, redb::RedbSecretStore}};
 
+pub mod json;
 pub mod redb;
 mod redb_imps;
-mod json;
 
 pub const PASS_SUBDIR: &'static str = "secret-service";
 
@@ -23,6 +23,41 @@ pub const NANOID_ALPHABET: [char; 63] = [
     'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '0', '1', '2', '3', '4',
     '5', '6', '7', '8', '9', '_',
 ];
+
+#[derive(Debug, Clone, Copy)]
+pub enum StoreType {
+    Json,
+    Redb,
+}
+
+/// Detect which store to use based on the password store directory
+/// Returns the store type, preferring REDB if it exists, otherwise JSON
+async fn select_store(pass: &PasswordStore) -> Result<StoreType> {
+    let secret_service_dir = pass.directory.join(PASS_SUBDIR);
+
+    // Check if secret-service directory exists
+    if secret_service_dir.exists() {
+        // Check if REDB database file exists
+        let redb_collections = secret_service_dir.join("collections.redb");
+        if redb_collections.exists() {
+            return Ok(StoreType::Redb);
+        }
+    }
+
+    // Default to JSON for new installations or if REDB doesn't exist
+    Ok(StoreType::Json)
+}
+
+/// Initialize the secret store, using the store type if given. Otherwise, uses the default store type
+pub async fn init_store<'a>(pass: &'a PasswordStore, force_type: Option<StoreType>) -> Result<Box<dyn SecretStore<'a> + 'a>> {
+    let store_type = if let Some(store_type) = force_type { store_type } else {
+        select_store(pass).await?
+    };
+    Ok(match store_type {
+        StoreType::Json => Box::new(JsonSecretStore::new(pass).await?),
+        StoreType::Redb => Box::new(RedbSecretStore::new(pass).await?)
+    })
+}
 
 /// convert a string to a valid ASCII slug
 pub fn slugify(string: &str) -> String {
@@ -54,7 +89,7 @@ pub fn get_collection_dir(collection_id: &str) -> PathBuf {
 }
 
 #[async_trait]
-pub trait SecretStore<'a>: Debug + DynClone {
+pub trait SecretStore<'a>: Debug + DynClone + Send + Sync {
     async fn new(pass: &'a PasswordStore) -> Result<Self>
     where
         Self: Sized;
