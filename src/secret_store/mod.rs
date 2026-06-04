@@ -6,6 +6,7 @@ use std::{
     sync::Arc,
 };
 
+use argh::FromArgValue;
 use async_trait::async_trait;
 use dyn_clone::DynClone;
 
@@ -13,7 +14,6 @@ use crate::{error::Result, pass::PasswordStore, secret_store::{json::JsonSecretS
 
 pub mod json;
 pub mod redb;
-mod redb_imps;
 
 pub const PASS_SUBDIR: &'static str = "secret-service";
 
@@ -24,7 +24,7 @@ pub const NANOID_ALPHABET: [char; 63] = [
     '5', '6', '7', '8', '9', '_',
 ];
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromArgValue)]
 pub enum StoreType {
     Json,
     Redb,

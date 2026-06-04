@@ -49,6 +49,7 @@ async fn run(args: CliArgs) -> Result {
                 pass,
                 args.forget_password_on_lock,
                 args.notify_on_access,
+                args.store_type
             )
             .await?;
 

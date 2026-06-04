@@ -1,5 +1,7 @@
 use argh::FromArgs;
 
+use crate::secret_store::StoreType;
+
 #[derive(FromArgs)]
 /// Background daemon for pass-secret-service: An implementation of org.freedesktop.secrets using pass
 pub struct CliArgs {
@@ -14,6 +16,10 @@ pub struct CliArgs {
     /// send a desktop notification via org.freedesktop.Notifications whenever a secret is accessed
     #[argh(switch, short = 'n', long = "notify-on-access")]
     pub notify_on_access: bool,
+
+    /// force the service to use a specific secret store backend. JSON is the default if a REDB store does not already exist
+    #[argh(option, short = 't')]
+    pub store_type: Option<StoreType>,
 
     /// print the current version
     #[argh(switch, short = 'V', long = "version")]
@@ -57,3 +63,8 @@ pub struct LastAccessorSubcommand {
     #[argh(positional)]
     pub id: String,
 }
+
+#[derive(FromArgs)]
+#[argh(subcommand, name = "migrate-to-json")]
+/// Migrate secret store from REDB to JSON format
+pub struct MigrateToJsonSubcommand {}

@@ -20,7 +20,7 @@ use crate::{
     error::{Error, OptionNoneNotFound, Result},
     pass::PasswordStore,
     secret_store::{
-        NANOID_ALPHABET, PASS_SUBDIR, SecretStore, StoreType, get_collection_dir, init_store, json::JsonSecretStore, redb::RedbSecretStore, slugify
+        NANOID_ALPHABET, SecretStore, StoreType, get_collection_dir, init_store, slugify
     },
 };
 
@@ -51,6 +51,7 @@ impl Service<'static> {
         pass: &'static PasswordStore,
         forget_password_on_lock: bool,
         notify_on_access: bool,
+        force_type: Option<StoreType>,
     ) -> Result<Self> {
         // Init the store (select default if needed)
         let store = init_store(pass, force_type).await?;
