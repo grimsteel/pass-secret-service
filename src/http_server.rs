@@ -155,7 +155,7 @@ pub async fn spawn(config: AppConfig, auth_gate: AuthGate) -> Result<JoinHandle<
     );
 
     let app = Router::new()
-        .route("/authenticate", post(authenticate))
+        .route("/alohomora/authenticate", post(authenticate))
         .with_state(ApiState { auth_gate });
 
     Ok(tokio::spawn(async move {
@@ -183,7 +183,7 @@ pub async fn spawn_setup_server(
     };
 
     let app = Router::new()
-        .route("/register", post(register_setup))
+        .route("/alohomora/register", post(register_setup))
         .with_state(state);
 
     Ok(tokio::spawn(async move {
