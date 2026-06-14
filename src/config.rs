@@ -2,7 +2,7 @@ use std::env;
 
 use crate::error::{Error, Result};
 
-const DEFAULT_DOMAIN: &str = "lukegt.com";
+const DEFAULT_DOMAIN: &str = "agent.lukegt.com";
 const DEFAULT_PORT: u16 = 19969;
 
 #[derive(Debug, Clone)]
