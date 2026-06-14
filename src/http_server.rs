@@ -77,6 +77,7 @@ pub struct RegisterRequest {
     pub schema_version: u32,
     pub device_uuid: String,
     pub keychain: KeychainInfo,
+    pub device_name: String,
     #[serde(default)]
     pub initialisation_token: Option<String>,
     pub public_key: PublicKeyInfo,
@@ -337,6 +338,7 @@ mod tests {
               "domain": "example.com",
               "port": 443
             },
+            "device_name": "Pixel 9",
             "initialisation_token": "optional-token",
             "public_key": {
               "algorithm": "RSA-OAEP-256",
