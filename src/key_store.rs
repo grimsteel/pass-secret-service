@@ -461,6 +461,28 @@ pub async fn list_android_device_auth_blobs() -> Result<Vec<AndroidDeviceAuthBlo
     Ok(devices)
 }
 
+pub async fn clear_secret_store() -> Result {
+    let key_dir = get_key_dir();
+    if key_dir.exists() {
+        log::info!("Deleting key directory: {:?}", key_dir);
+        tokio::fs::remove_dir_all(&key_dir).await?;
+    }
+
+    let pass_dir = std::env::var("PASSWORD_STORE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").expect("$HOME must be set");
+            std::path::Path::new(&home).join(".password-store")
+        });
+    let secret_service_dir = pass_dir.join("secret-service");
+    if secret_service_dir.exists() {
+        log::info!("Deleting secret-service directory from password store: {:?}", secret_service_dir);
+        tokio::fs::remove_dir_all(&secret_service_dir).await?;
+    }
+
+    Ok(())
+}
+
 fn temp_pairing_key_dir(key_dir: &Path, token_id: &str) -> PathBuf {
     key_dir.join(TEMP_PAIRING_KEYS_DIR).join(token_id)
 }
@@ -626,5 +648,49 @@ mod tests {
 
         // Clean up temp dir files
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_clear_secret_store_removes_directories() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let temp_dir = std::env::temp_dir().join(format!("test_key_dir_{}", nanoid::nanoid!()));
+        let temp_pass_dir = std::env::temp_dir().join(format!("test_pass_dir_{}", nanoid::nanoid!()));
+        let temp_secret_service_dir = temp_pass_dir.join("secret-service");
+
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        std::fs::create_dir_all(&temp_secret_service_dir).unwrap();
+
+        let original_key_dir = std::env::var("ALOHOMORA_KEY_DIR").ok();
+        let original_pass_dir = std::env::var("PASSWORD_STORE_DIR").ok();
+
+        std::env::set_var("ALOHOMORA_KEY_DIR", &temp_dir);
+        std::env::set_var("PASSWORD_STORE_DIR", &temp_pass_dir);
+
+        // Verify directories exist
+        assert!(temp_dir.exists());
+        assert!(temp_secret_service_dir.exists());
+
+        // Perform the clear logic
+        let clear_result = super::clear_secret_store().await;
+        assert!(clear_result.is_ok());
+
+        // Verify directories are gone
+        assert!(!temp_dir.exists());
+        assert!(!temp_secret_service_dir.exists());
+
+        // Clean up env vars
+        if let Some(val) = original_key_dir {
+            std::env::set_var("ALOHOMORA_KEY_DIR", val);
+        } else {
+            std::env::remove_var("ALOHOMORA_KEY_DIR");
+        }
+        if let Some(val) = original_pass_dir {
+            std::env::set_var("PASSWORD_STORE_DIR", val);
+        } else {
+            std::env::remove_var("PASSWORD_STORE_DIR");
+        }
+
+        // Clean up temp dirs
+        let _ = std::fs::remove_dir_all(&temp_pass_dir);
     }
 }
