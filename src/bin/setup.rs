@@ -58,7 +58,32 @@ async fn main() -> ExitCode {
     };
 
     match key_store::run_setup(&config).await {
-        Ok(_) => ExitCode::SUCCESS,
+        Ok(true) => {
+            let key_dir = key_store::get_key_dir();
+            let local_key_path = key_dir.join(key_store::LOCAL_KEY_FILE);
+            let local_key = match key_store::read_local_key(&local_key_path).await {
+                Ok(Some(key)) => key,
+                _ => {
+                    eprintln!("Error: local key not found after setup.");
+                    return ExitCode::FAILURE;
+                }
+            };
+
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            match pass_secret_service::http_server::spawn_setup_server(config, local_key, tx).await {
+                Ok(_server_handle) => {
+                    println!("Waiting for Android device registration...");
+                    let _ = rx.await;
+                    println!("Registration successful! Setup completed successfully.");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("Error starting registration server: {}", e);
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Ok(false) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("Setup error: {}", e);
             ExitCode::FAILURE

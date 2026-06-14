@@ -140,6 +140,12 @@ impl From<Error> for ApiError {
     }
 }
 
+#[derive(Clone)]
+pub struct SetupApiState {
+    local_key: key_store::SecureKey,
+    done_tx: std::sync::Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+}
+
 pub async fn spawn(config: AppConfig, auth_gate: AuthGate) -> Result<JoinHandle<()>> {
     let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.internal_port));
     let listener = TcpListener::bind(addr).await?;
@@ -149,7 +155,6 @@ pub async fn spawn(config: AppConfig, auth_gate: AuthGate) -> Result<JoinHandle<
     );
 
     let app = Router::new()
-        .route("/register", post(register))
         .route("/authenticate", post(authenticate))
         .with_state(ApiState { auth_gate });
 
@@ -160,8 +165,36 @@ pub async fn spawn(config: AppConfig, auth_gate: AuthGate) -> Result<JoinHandle<
     }))
 }
 
-async fn register(
-    State(state): State<ApiState>,
+pub async fn spawn_setup_server(
+    config: AppConfig,
+    local_key: key_store::SecureKey,
+    done_tx: tokio::sync::oneshot::Sender<()>,
+) -> Result<JoinHandle<()>> {
+    let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.internal_port));
+    let listener = TcpListener::bind(addr).await?;
+    info!(
+        "Alohomora Setup HTTP server listening on {} for {}:{}",
+        addr, config.domain, config.external_port
+    );
+
+    let state = SetupApiState {
+        local_key,
+        done_tx: std::sync::Arc::new(tokio::sync::Mutex::new(Some(done_tx))),
+    };
+
+    let app = Router::new()
+        .route("/register", post(register_setup))
+        .with_state(state);
+
+    Ok(tokio::spawn(async move {
+        if let Err(err) = axum::serve(listener, app).await {
+            error!("Alohomora Setup HTTP server failed: {err}");
+        }
+    }))
+}
+
+async fn register_setup(
+    State(state): State<SetupApiState>,
     Json(request): Json<RegisterRequest>,
 ) -> std::result::Result<StatusCode, ApiError> {
     debug!(
@@ -186,9 +219,9 @@ async fn register(
     validate_public_key_info(&request.public_key)?;
 
     let secret_key =
-        key_store::read_temp_secret_key(initialisation_token, state.auth_gate.local_key()).await?;
+        key_store::read_temp_secret_key(initialisation_token, &state.local_key).await?;
     let locally_encrypted_secret_key = secret_key.unlock(|secret_key| {
-        key_store::encrypt_aes256_gcm(state.auth_gate.local_key(), secret_key)
+        key_store::encrypt_aes256_gcm(&state.local_key, secret_key)
     })?;
     let encrypted_secret_key = locally_encrypted_secret_key.unlock_slice(|encrypted| {
         encrypt_with_registration_public_key(&request.public_key, encrypted)
@@ -197,7 +230,7 @@ async fn register(
     let registration_json = serde_json::to_vec(&request)
         .map_err(|err| ApiError::internal(format!("failed to serialize registration: {err}")))?;
     let encrypted_registration =
-        key_store::encrypt_aes256_gcm(state.auth_gate.local_key(), &registration_json)?;
+        key_store::encrypt_aes256_gcm(&state.local_key, &registration_json)?;
 
     key_store::store_android_device_registration(
         &request.device_uuid,
@@ -210,6 +243,10 @@ async fn register(
         "Registered Android device {} at device-keys/android/{}",
         request.device.model, request.device_uuid
     );
+
+    if let Some(tx) = state.done_tx.lock().await.take() {
+        let _ = tx.send(());
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }

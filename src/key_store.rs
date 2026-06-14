@@ -27,7 +27,7 @@ use crate::{
 };
 
 const KEY_DIR: &str = "/var/lib/alohomora-service";
-const LOCAL_KEY_FILE: &str = "local_key.bin";
+pub const LOCAL_KEY_FILE: &str = "local_key.bin";
 const DEVICE_KEYS_DIR: &str = "device-keys";
 const ANDROID_DEVICE_KEYS_DIR: &str = "android";
 const TEMP_PAIRING_KEYS_DIR: &str = "temp-pairing-keys";
@@ -107,7 +107,7 @@ pub async fn initialize(_config: &AppConfig) -> Result<StartupKeys> {
     Ok(StartupKeys { local_key })
 }
 
-pub async fn run_setup(config: &AppConfig) -> Result {
+pub async fn run_setup(config: &AppConfig) -> Result<bool> {
     let key_dir = get_key_dir();
     ensure_private_dir(&key_dir).await?;
 
@@ -119,12 +119,11 @@ pub async fn run_setup(config: &AppConfig) -> Result {
 
     if !has_existing_pairing_keys(&key_dir).await? {
         create_temp_pairing_key(&key_dir, &local_key, config).await?;
-        println!("Setup completed successfully.");
+        Ok(true)
     } else {
         println!("Setup already completed.");
+        Ok(false)
     }
-
-    Ok(())
 }
 
 async fn ensure_private_dir(path: &Path) -> Result {
