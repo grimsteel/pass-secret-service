@@ -3,6 +3,18 @@ name = "pass-secret-service"
 version = "0.7.0"
 edition = "2021"
 
+[lib]
+name = "pass_secret_service"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pass-secret-service"
+path = "src/main.rs"
+
+[[bin]]
+name = "alohomora-setup"
+path = "src/bin/setup.rs"
+
 [dependencies]
 aes = "0.8.4"
 aes-gcm = "0.10.3"

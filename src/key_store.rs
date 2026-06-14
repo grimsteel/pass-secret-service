@@ -27,7 +27,7 @@ use crate::{
 };
 
 const KEY_DIR: &str = "/var/lib/alohomora-service";
-const LOCAL_KEY_FILE: &str = "local_key.bin";
+pub const LOCAL_KEY_FILE: &str = "local_key.bin";
 const DEVICE_KEYS_DIR: &str = "device-keys";
 const ANDROID_DEVICE_KEYS_DIR: &str = "android";
 const TEMP_PAIRING_KEYS_DIR: &str = "temp-pairing-keys";
@@ -51,18 +51,79 @@ pub struct AndroidDeviceAuthBlob {
     pub encrypted_secret_key: SecureBlob,
 }
 
-pub async fn initialize(config: &AppConfig) -> Result<StartupKeys> {
-    let key_dir = Path::new(KEY_DIR);
-    ensure_private_dir(key_dir).await?;
+pub fn get_key_dir() -> PathBuf {
+    std::env::var("ALOHOMORA_KEY_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(KEY_DIR))
+}
 
+pub async fn read_local_key(path: &Path) -> Result<Option<SecureKey>> {
+    if let Ok(cred_dir) = std::env::var("CREDENTIALS_DIRECTORY") {
+        let cred_path = Path::new(&cred_dir).join("local_key.bin");
+        if cred_path.exists() {
+            match read(&cred_path).await {
+                Ok(bytes) => return Ok(Some(secure_key_from_vec(bytes)?)),
+                Err(e) => {
+                    log::warn!("Failed to read credential from systemd path {:?}: {}", cred_path, e);
+                }
+            }
+        }
+    }
+
+    if path.exists() {
+        let output = std::process::Command::new("systemd-creds")
+            .args(["decrypt", "--name=local_key.bin", path.to_str().unwrap(), "-"])
+            .output();
+        match output {
+            Ok(out) if out.status.success() => {
+                return Ok(Some(secure_key_from_vec(out.stdout)?));
+            }
+            Ok(out) => {
+                log::warn!(
+                    "systemd-creds decryption failed with exit code {:?}, stderr: {}",
+                    out.status.code(),
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+            Err(e) => {
+                log::warn!("Failed to run systemd-creds decrypt on {:?}: {}", path, e);
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+pub async fn initialize(_config: &AppConfig) -> Result<StartupKeys> {
+    let key_dir = get_key_dir();
     let local_key_path = key_dir.join(LOCAL_KEY_FILE);
-    let local_key = read_or_create_local_key(&local_key_path).await?;
+    let local_key = read_local_key(&local_key_path).await?
+        .ok_or(Error::SetupIncomplete)?;
 
-    if !has_existing_pairing_keys(key_dir).await? {
-        create_temp_pairing_key(key_dir, &local_key, config).await?;
+    if !has_existing_pairing_keys(&key_dir).await? {
+        return Err(Error::SetupIncomplete);
     }
 
     Ok(StartupKeys { local_key })
+}
+
+pub async fn run_setup(config: &AppConfig) -> Result<bool> {
+    let key_dir = get_key_dir();
+    ensure_private_dir(&key_dir).await?;
+
+    let local_key_path = key_dir.join(LOCAL_KEY_FILE);
+    let local_key = match read_local_key(&local_key_path).await? {
+        Some(key) => key,
+        None => read_or_create_local_key(&local_key_path).await?,
+    };
+
+    if !has_existing_pairing_keys(&key_dir).await? {
+        create_temp_pairing_key(&key_dir, &local_key, config).await?;
+        Ok(true)
+    } else {
+        println!("Setup already completed.");
+        Ok(false)
+    }
 }
 
 async fn ensure_private_dir(path: &Path) -> Result {
@@ -337,7 +398,7 @@ pub async fn read_temp_secret_key(token: &str, local_key: &SecureKey) -> Result<
     let pairing_token = parse_pairing_token(token)?;
     let token_key = derive_token_key(&pairing_token.value)?;
     let encrypted = secure_blob_from_vec(
-        read(temp_pairing_key_dir(Path::new(KEY_DIR), &pairing_token.id).join(ENC_SECRET_KEY_FILE))
+        read(temp_pairing_key_dir(&get_key_dir(), &pairing_token.id).join(ENC_SECRET_KEY_FILE))
             .await?,
     )?;
     let locally_encrypted =
@@ -353,7 +414,7 @@ pub async fn store_android_device_registration(
     encrypted_registration_json: &SecureBlob,
     encrypted_secret_key: &SecureBlob,
 ) -> Result {
-    let device_dir = Path::new(KEY_DIR)
+    let device_dir = get_key_dir()
         .join(DEVICE_KEYS_DIR)
         .join(ANDROID_DEVICE_KEYS_DIR)
         .join(device_uuid);
@@ -367,7 +428,7 @@ pub async fn store_android_device_registration(
 }
 
 pub async fn list_android_device_auth_blobs() -> Result<Vec<AndroidDeviceAuthBlob>> {
-    let android_dir = Path::new(KEY_DIR)
+    let android_dir = get_key_dir()
         .join(DEVICE_KEYS_DIR)
         .join(ANDROID_DEVICE_KEYS_DIR);
     let mut entries = match read_dir(android_dir).await {
@@ -397,6 +458,28 @@ pub async fn list_android_device_auth_blobs() -> Result<Vec<AndroidDeviceAuthBlo
     }
 
     Ok(devices)
+}
+
+pub async fn clear_secret_store() -> Result {
+    let key_dir = get_key_dir();
+    if key_dir.exists() {
+        log::info!("Deleting key directory: {:?}", key_dir);
+        tokio::fs::remove_dir_all(&key_dir).await?;
+    }
+
+    let pass_dir = std::env::var("PASSWORD_STORE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").expect("$HOME must be set");
+            std::path::Path::new(&home).join(".password-store")
+        });
+    let secret_service_dir = pass_dir.join("secret-service");
+    if secret_service_dir.exists() {
+        log::info!("Deleting secret-service directory from password store: {:?}", secret_service_dir);
+        tokio::fs::remove_dir_all(&secret_service_dir).await?;
+    }
+
+    Ok(())
 }
 
 fn temp_pairing_key_dir(key_dir: &Path, token_id: &str) -> PathBuf {
@@ -484,5 +567,129 @@ mod tests {
                 println!("Skipping test: systemd-creds not fully configured or lacks permissions on this host: {:?}", e);
             }
         }
+    }
+
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[tokio::test]
+    async fn test_initialize_fails_when_setup_incomplete() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let temp_dir = std::env::temp_dir().join(format!("test_key_dir_{}", nanoid::nanoid!()));
+        let original_env = std::env::var("ALOHOMORA_KEY_DIR").ok();
+        std::env::set_var("ALOHOMORA_KEY_DIR", &temp_dir);
+
+        let config = crate::config::AppConfig {
+            domain: "test.com".to_string(),
+            external_port: 12345,
+            internal_port: 12345,
+        };
+
+        let result = super::initialize(&config).await;
+        assert!(matches!(result, Err(crate::error::Error::SetupIncomplete)));
+
+        if let Some(val) = original_env {
+            std::env::set_var("ALOHOMORA_KEY_DIR", val);
+        } else {
+            std::env::remove_var("ALOHOMORA_KEY_DIR");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_setup_and_initialize_flow() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let temp_dir = std::env::temp_dir().join(format!("test_key_dir_{}", nanoid::nanoid!()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Write local_key.bin to temp_dir to act as CREDENTIALS_DIRECTORY
+        let mock_key = [7u8; 32];
+        let cred_file_path = temp_dir.join("local_key.bin");
+        std::fs::write(&cred_file_path, &mock_key).unwrap();
+
+        let original_key_dir = std::env::var("ALOHOMORA_KEY_DIR").ok();
+        let original_cred_dir = std::env::var("CREDENTIALS_DIRECTORY").ok();
+
+        std::env::set_var("ALOHOMORA_KEY_DIR", &temp_dir);
+        std::env::set_var("CREDENTIALS_DIRECTORY", &temp_dir);
+
+        let config = crate::config::AppConfig {
+            domain: "test.com".to_string(),
+            external_port: 12345,
+            internal_port: 12345,
+        };
+
+        // 1. Initially, initialize should fail because pairing keys don't exist yet
+        let init_result = super::initialize(&config).await;
+        assert!(matches!(init_result, Err(crate::error::Error::SetupIncomplete)));
+
+        // 2. Run setup
+        let setup_result = super::run_setup(&config).await;
+        assert!(setup_result.is_ok());
+
+        // 3. Now, initialize should succeed and read the correct key
+        let init_success = super::initialize(&config).await;
+        assert!(init_success.is_ok());
+        let startup_keys = init_success.unwrap();
+        startup_keys.local_key.unlock(|key_bytes| {
+            assert_eq!(key_bytes, &mock_key);
+        });
+
+        // Clean up env vars
+        if let Some(val) = original_key_dir {
+            std::env::set_var("ALOHOMORA_KEY_DIR", val);
+        } else {
+            std::env::remove_var("ALOHOMORA_KEY_DIR");
+        }
+        if let Some(val) = original_cred_dir {
+            std::env::set_var("CREDENTIALS_DIRECTORY", val);
+        } else {
+            std::env::remove_var("CREDENTIALS_DIRECTORY");
+        }
+
+        // Clean up temp dir files
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_clear_secret_store_removes_directories() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let temp_dir = std::env::temp_dir().join(format!("test_key_dir_{}", nanoid::nanoid!()));
+        let temp_pass_dir = std::env::temp_dir().join(format!("test_pass_dir_{}", nanoid::nanoid!()));
+        let temp_secret_service_dir = temp_pass_dir.join("secret-service");
+
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        std::fs::create_dir_all(&temp_secret_service_dir).unwrap();
+
+        let original_key_dir = std::env::var("ALOHOMORA_KEY_DIR").ok();
+        let original_pass_dir = std::env::var("PASSWORD_STORE_DIR").ok();
+
+        std::env::set_var("ALOHOMORA_KEY_DIR", &temp_dir);
+        std::env::set_var("PASSWORD_STORE_DIR", &temp_pass_dir);
+
+        // Verify directories exist
+        assert!(temp_dir.exists());
+        assert!(temp_secret_service_dir.exists());
+
+        // Perform the clear logic
+        let clear_result = super::clear_secret_store().await;
+        assert!(clear_result.is_ok());
+
+        // Verify directories are gone
+        assert!(!temp_dir.exists());
+        assert!(!temp_secret_service_dir.exists());
+
+        // Clean up env vars
+        if let Some(val) = original_key_dir {
+            std::env::set_var("ALOHOMORA_KEY_DIR", val);
+        } else {
+            std::env::remove_var("ALOHOMORA_KEY_DIR");
+        }
+        if let Some(val) = original_pass_dir {
+            std::env::set_var("PASSWORD_STORE_DIR", val);
+        } else {
+            std::env::remove_var("PASSWORD_STORE_DIR");
+        }
+
+        // Clean up temp dirs
+        let _ = std::fs::remove_dir_all(&temp_pass_dir);
     }
 }
