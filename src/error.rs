@@ -29,6 +29,8 @@ pub enum Error {
     InvalidSession,
     #[error("Access denied")]
     PermissionDenied,
+    #[error("Setup has not been completed. Please run the alohomora-setup executable.")]
+    SetupIncomplete,
 }
 
 impl DBusError for Error {
@@ -62,11 +64,13 @@ impl DBusError for Error {
             Error::NotInitialized => "me.grimsteel.PassSecretService.PassNotInitialized",
             Error::InvalidSession => "org.freedesktop.Secret.Error.NoSession",
             Error::PermissionDenied => "org.freedesktop.DBus.Error.AccessDenied",
+            Error::SetupIncomplete => "me.grimsteel.PassSecretService.SetupIncomplete",
         })
     }
 
     fn description(&self) -> Option<&str> {
         match self {
+            Error::SetupIncomplete => Some("Setup has not been completed. Please run the alohomora-setup executable."),
             Error::DbusError(zbus::Error::MethodError(_, desc, _)) => desc.as_deref(),
             Error::GpgError(e) => Some(e.as_str()),
             Error::ConfigError(e) => Some(e.as_str()),
