@@ -460,6 +460,23 @@ pub async fn list_android_device_auth_blobs() -> Result<Vec<AndroidDeviceAuthBlo
     Ok(devices)
 }
 
+pub async fn read_android_device_registration(
+    device_uuid: &str,
+    local_key: &SecureKey,
+) -> Result<serde_json::Value> {
+    let device_dir = get_key_dir()
+        .join(DEVICE_KEYS_DIR)
+        .join(ANDROID_DEVICE_KEYS_DIR)
+        .join(device_uuid);
+    let path = device_dir.join(ENC_DEVICE_REGISTRATION_FILE);
+    let encrypted = read(&path).await?;
+    let decrypted = decrypt_aes256_gcm(local_key, &encrypted)?;
+    let registration: serde_json::Value = decrypted
+        .unlock_slice(|bytes| serde_json::from_slice(bytes))
+        .map_err(|e| Error::InvalidRequest(format!("Failed to parse device registration: {}", e)))?;
+    Ok(registration)
+}
+
 pub async fn clear_secret_store() -> Result {
     let key_dir = get_key_dir();
     if key_dir.exists() {

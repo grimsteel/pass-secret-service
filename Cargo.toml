@@ -37,6 +37,7 @@ num = { version = "0.4.3", features = ["rand"] }
 rand = "0.8.5"
 qrcode = { version = "0.14.1", default-features = false }
 redb = "2.1.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rsa = { version = "0.9.10", features = ["sha2"] }
 schemars = "0.8.22"
 secure-types = { version = "0.2.40", features = ["serde"] }

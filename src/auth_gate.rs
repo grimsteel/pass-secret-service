@@ -87,6 +87,23 @@ impl AuthGate {
         }
 
         for device in devices {
+            // Decrypt the device registration to retrieve the FCM token
+            let registration = match key_store::read_android_device_registration(&device.device_uuid, &self.inner.local_key).await {
+                Ok(reg) => reg,
+                Err(err) => {
+                    warn!("Failed to read registration for device {}: {}", device.device_uuid, err);
+                    continue;
+                }
+            };
+
+            let fcm_token = match registration["fcm"]["token"].as_str() {
+                Some(t) => t.to_string(),
+                None => {
+                    warn!("FCM token not found in registration for device {}", device.device_uuid);
+                    continue;
+                }
+            };
+
             let encrypted_blob = device
                 .encrypted_secret_key
                 .unlock_slice(|encrypted| BASE64.encode(encrypted));
@@ -105,15 +122,38 @@ impl AuthGate {
                 port: self.inner.external_port.to_string(),
             };
 
-            match serde_json::to_string(&payload) {
-                Ok(payload) => info!(
-                    "Prepared Android auth payload for device {}: {}",
-                    device.device_uuid, payload
-                ),
-                Err(err) => warn!(
-                    "Failed to serialize Android auth payload for device {}: {}",
-                    device.device_uuid, err
-                ),
+            let request_body = serde_json::json!({
+                "token": fcm_token,
+                "request_uuid": payload.request_uuid,
+                "encrypted_blob": payload.encrypted_blob,
+                "uid": payload.uid,
+                "username": payload.username,
+                "pid": payload.pid,
+                "process_name": payload.process_name,
+                "access_timestamp_ms": payload.access_timestamp_ms,
+                "domain": payload.domain,
+                "port": payload.port,
+            });
+
+            let client = reqwest::Client::new();
+            let url = std::env::var("ALOHOMORA_NOTIFICATION_URL")
+                .unwrap_or_else(|_| "https://alohomora.app/send-notification".to_string());
+
+            info!("Sending push notification to web service for device: {}", device.device_uuid);
+            match client.post(&url).json(&request_body).send().await {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        info!("Successfully sent notification request to web service for device {}", device.device_uuid);
+                    } else {
+                        warn!("Web service returned error status when sending notification to device {}: {}", device.device_uuid, resp.status());
+                        if let Ok(text) = resp.text().await {
+                            warn!("Response body: {}", text);
+                        }
+                    }
+                }
+                Err(err) => {
+                    warn!("Failed to send notification request to web service for device {}: {}", device.device_uuid, err);
+                }
             }
         }
 
