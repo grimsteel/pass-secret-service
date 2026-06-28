@@ -529,6 +529,7 @@ impl<'a> SecretStore<'a> for RedbSecretStore<'a> {
             let mut attributes_table = tx.open_multimap_table(ATTRIBUTES_TABLE).into_result()?;
             let mut attributes_table_reverse =
                 tx.open_table(ATTRIBUTES_TABLE_REVERSE).into_result()?;
+            let mut labels_table = tx.open_table(LABELS_TABLE).into_result()?;
 
             let secret_id = secret_id.as_str();
 
@@ -541,10 +542,12 @@ impl<'a> SecretStore<'a> for RedbSecretStore<'a> {
             for (k, v) in attrs {
                 attributes_table.remove((k, v), secret_id).into_result()?;
             }
+            labels_table.remove(secret_id).into_result()?;
 
             drop(attributes_table);
             drop(attrs_guard);
             drop(attributes_table_reverse);
+            drop(labels_table);
             tx.commit().into_result()?;
 
             Ok(())
