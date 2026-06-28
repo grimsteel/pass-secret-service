@@ -15,8 +15,8 @@ pub struct AppConfig {
 impl AppConfig {
     pub fn from_env() -> Result<Self> {
         let domain = env::var("ALOHOMORA_DOMAIN").unwrap_or_else(|_| DEFAULT_DOMAIN.into());
-        let external_port = read_port_env("ALOHOMORA_EXTERNAL_PORT")?;
-        let internal_port = read_port_env("ALOHOMORA_INTERNAL_PORT")?;
+        let external_port = read_port_env("ALOHOMORA_EXTERNAL_PORT", 443)?;
+        let internal_port = read_port_env("ALOHOMORA_INTERNAL_PORT", DEFAULT_PORT)?;
 
         Ok(Self {
             domain,
@@ -26,11 +26,11 @@ impl AppConfig {
     }
 }
 
-fn read_port_env(name: &str) -> Result<u16> {
+fn read_port_env(name: &str, default: u16) -> Result<u16> {
     match env::var(name) {
         Ok(value) => value
             .parse::<u16>()
             .map_err(|_| Error::ConfigError(format!("{name} must be a valid u16, got `{value}`"))),
-        Err(_) => Ok(DEFAULT_PORT),
+        Err(_) => Ok(default),
     }
 }
