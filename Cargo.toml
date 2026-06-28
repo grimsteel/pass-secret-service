@@ -31,3 +31,8 @@ zbus = { version = "4.3.1", default-features = false, features = ["tokio"] }
 strip = true
 opt-level = "z"
 lto = true
+
+[dev-dependencies]
+tokio = { version = "1.38.1", features = ["net"] }
+tempfile = "3.10.1"
+zbus = { version = "4.3.1", default-features = false, features = ["p2p", "tokio"] }
