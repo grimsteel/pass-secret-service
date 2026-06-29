@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    io::ErrorKind,
     path::PathBuf,
     sync::Arc,
 };
@@ -346,10 +347,10 @@ impl Service<'static> {
     async fn read_alias(&'_ self, name: String) -> Result<ObjectPath<'_>> {
         let alias = slugify(&name);
 
-        if let Some(target) = collection_path(self.store.get_alias(Arc::new(alias)).await?) {
-            Ok(target)
-        } else {
-            Ok(EMPTY_PATH)
+        match self.store.get_alias(Arc::new(alias)).await {
+            Ok(target) => Ok(collection_path(target).unwrap_or(EMPTY_PATH)),
+            Err(Error::IoError(err)) if err.kind() == ErrorKind::NotFound => Ok(EMPTY_PATH),
+            Err(err) => Err(err),
         }
     }
 
@@ -436,4 +437,258 @@ impl Service<'static> {
     #[zbus(signal)]
     async fn collection_modified(ctx: &SignalContext<'_>, path: ObjectPath<'_>)
         -> zbus::Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, fs::Metadata, io::ErrorKind, sync::Arc};
+
+    use async_trait::async_trait;
+
+    use crate::{
+        error::{Error, Result},
+        secret_store::SecretStore,
+    };
+
+    use super::{Service, EMPTY_PATH};
+
+    #[derive(Clone, Debug)]
+    enum AliasLookup {
+        Target(&'static str),
+        PermissionDenied,
+    }
+
+    #[derive(Clone, Debug)]
+    struct TestStore {
+        aliases: HashMap<String, AliasLookup>,
+    }
+
+    impl TestStore {
+        fn new(aliases: impl IntoIterator<Item = (&'static str, AliasLookup)>) -> Self {
+            Self {
+                aliases: aliases
+                    .into_iter()
+                    .map(|(alias, lookup)| (alias.into(), lookup))
+                    .collect(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl SecretStore<'static> for TestStore {
+        async fn new(_pass: &'static crate::pass::PasswordStore) -> Result<Self>
+        where
+            Self: Sized,
+        {
+            unimplemented!()
+        }
+
+        fn get_pass(&self) -> &'static crate::pass::PasswordStore {
+            unreachable!("read_alias tests do not use SecretStore::get_pass")
+        }
+
+        async fn get_label(&self, _collection: Arc<String>) -> Result<String> {
+            unimplemented!()
+        }
+
+        async fn set_label(&self, _collection_id: Arc<String>, _label: String) -> Result {
+            unimplemented!()
+        }
+
+        async fn list_all_aliases(&self) -> Result<HashMap<String, Vec<String>>> {
+            unimplemented!()
+        }
+
+        async fn list_aliases_for_collection(
+            &self,
+            _collection: Arc<String>,
+        ) -> Result<Vec<String>> {
+            unimplemented!()
+        }
+
+        async fn get_alias(&self, alias: Arc<String>) -> Result<String> {
+            match self.aliases.get(alias.as_str()) {
+                Some(AliasLookup::Target(target)) => Ok((*target).into()),
+                Some(AliasLookup::PermissionDenied) => Err(Error::IoError(std::io::Error::from(
+                    ErrorKind::PermissionDenied,
+                ))),
+                None => Err(Error::IoError(std::io::Error::from(ErrorKind::NotFound))),
+            }
+        }
+
+        async fn set_alias(&self, _alias: Arc<String>, _collection: Option<String>) -> Result<()> {
+            unimplemented!()
+        }
+
+        async fn collections(&self) -> Vec<String> {
+            unimplemented!()
+        }
+
+        async fn create_collection(
+            &self,
+            _label: Option<String>,
+            _alias: Option<String>,
+        ) -> Result<String> {
+            unimplemented!()
+        }
+
+        async fn delete_collection(&self, _collection_id: Arc<String>) -> Result {
+            unimplemented!()
+        }
+
+        async fn search_all_collections(
+            &self,
+            _attributes: HashMap<String, String>,
+        ) -> Result<HashMap<String, Vec<String>>> {
+            unimplemented!()
+        }
+
+        async fn search_collection(
+            &self,
+            _collection_id: Arc<String>,
+            _attributes: Arc<HashMap<String, String>>,
+        ) -> Result<Vec<String>> {
+            unimplemented!()
+        }
+
+        async fn stat_collection(&self, _collection_id: &str) -> Result<Metadata> {
+            unimplemented!()
+        }
+
+        async fn list_secrets(&self, _collection_id: &str) -> Result<Vec<String>> {
+            unimplemented!()
+        }
+
+        async fn read_secret(
+            &self,
+            _collection_id: &str,
+            _secret_id: &str,
+            _can_prompt: bool,
+        ) -> Result<Vec<u8>> {
+            unimplemented!()
+        }
+
+        async fn read_secret_attrs(
+            &self,
+            _collection: Arc<String>,
+            _secret: Arc<String>,
+        ) -> Result<HashMap<String, String>> {
+            unimplemented!()
+        }
+
+        async fn delete_secret(
+            &self,
+            _collection: Arc<String>,
+            _secret: Arc<String>,
+        ) -> Result<()> {
+            unimplemented!()
+        }
+
+        async fn stat_secret(&self, _collection_id: &str, _secret_id: &str) -> Result<Metadata> {
+            unimplemented!()
+        }
+
+        async fn create_secret(
+            &self,
+            _collection_id: Arc<String>,
+            _label: Option<String>,
+            _secret: Vec<u8>,
+            _attributes: Arc<HashMap<String, String>>,
+        ) -> Result<String> {
+            unimplemented!()
+        }
+
+        async fn set_secret(
+            &self,
+            _collection_id: &str,
+            _secret_id: &str,
+            _value: Vec<u8>,
+        ) -> Result {
+            unimplemented!()
+        }
+
+        async fn set_secret_label(
+            &self,
+            _collection: Arc<String>,
+            _secret: Arc<String>,
+            _label: String,
+        ) -> Result<()> {
+            unimplemented!()
+        }
+
+        async fn get_secret_label(
+            &self,
+            _collection: Arc<String>,
+            _secret: Arc<String>,
+        ) -> Result<String> {
+            unimplemented!()
+        }
+
+        async fn set_secret_attrs(
+            &self,
+            _collection_id: Arc<String>,
+            _secret_id: Arc<String>,
+            _attrs: HashMap<String, String>,
+        ) -> Result {
+            unimplemented!()
+        }
+    }
+
+    fn service(aliases: impl IntoIterator<Item = (&'static str, AliasLookup)>) -> Service<'static> {
+        Service {
+            store: Box::new(TestStore::new(aliases)),
+            forget_password_on_lock: false,
+            notify_on_access: false,
+        }
+    }
+
+    async fn assert_alias_path(
+        aliases: impl IntoIterator<Item = (&'static str, AliasLookup)>,
+        alias: &str,
+        expected: &str,
+    ) {
+        assert_eq!(
+            service(aliases)
+                .read_alias(alias.into())
+                .await
+                .unwrap()
+                .as_str(),
+            expected
+        );
+    }
+
+    #[tokio::test]
+    async fn read_alias_returns_default_collection_path() {
+        assert_alias_path(
+            [("default", AliasLookup::Target("default"))],
+            "default",
+            "/org/freedesktop/secrets/collection/default",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn read_alias_returns_root_for_missing_aliases() {
+        for alias in ["session", "login", "missing"] {
+            assert_alias_path(
+                [("default", AliasLookup::Target("default"))],
+                alias,
+                EMPTY_PATH.as_str(),
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn read_alias_propagates_non_not_found_io_errors() {
+        let err = service([("forbidden", AliasLookup::PermissionDenied)])
+            .read_alias("forbidden".into())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::IoError(ref io_err) if io_err.kind() == ErrorKind::PermissionDenied
+        ));
+    }
 }
