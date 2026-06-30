@@ -529,6 +529,7 @@ impl<'a> SecretStore<'a> for RedbSecretStore<'a> {
             let mut attributes_table = tx.open_multimap_table(ATTRIBUTES_TABLE).into_result()?;
             let mut attributes_table_reverse =
                 tx.open_table(ATTRIBUTES_TABLE_REVERSE).into_result()?;
+            let mut labels_table = tx.open_table(LABELS_TABLE).into_result()?;
 
             let secret_id = secret_id.as_str();
 
@@ -541,10 +542,12 @@ impl<'a> SecretStore<'a> for RedbSecretStore<'a> {
             for (k, v) in attrs {
                 attributes_table.remove((k, v), secret_id).into_result()?;
             }
+            labels_table.remove(secret_id).into_result()?;
 
             drop(attributes_table);
             drop(attrs_guard);
             drop(attributes_table_reverse);
+            drop(labels_table);
             tx.commit().into_result()?;
 
             Ok(())
@@ -750,5 +753,181 @@ impl<'a> SecretStore<'a> for RedbSecretStore<'a> {
         })
         .await
         .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        os::unix::fs::PermissionsExt,
+        path::{Path, PathBuf},
+    };
+
+    use tempfile::{tempdir, TempDir};
+    use tokio::{fs, process::Command};
+
+    use super::*;
+
+    const RECIPIENT: &str = "pass-secret-service-test@example.invalid";
+
+    struct MockGpgHome {
+        temp_dir: TempDir,
+        path: PathBuf,
+    }
+
+    impl MockGpgHome {
+        async fn new() -> Self {
+            let temp_dir = tempdir().unwrap();
+            let path = temp_dir.path().join("gnupg");
+            fs::create_dir(&path).await.unwrap();
+            fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+                .await
+                .unwrap();
+
+            let output = Command::new("gpg")
+                .arg("--batch")
+                .arg("--homedir")
+                .arg(&path)
+                .args([
+                    "--passphrase",
+                    "",
+                    "--quick-generate-key",
+                    RECIPIENT,
+                    "rsa2048",
+                    "encr",
+                    "0",
+                ])
+                .output()
+                .await
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "failed to create test GPG key: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+
+            Self { temp_dir, path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn temp_path(&self) -> &Path {
+            self.temp_dir.path()
+        }
+    }
+
+    impl Drop for MockGpgHome {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("gpgconf")
+                .arg("--homedir")
+                .arg(&self.path)
+                .args(["--kill", "gpg-agent"])
+                .status();
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_secret_removes_all_secret_storage() {
+        let gpg_home = MockGpgHome::new().await;
+        let password_store_dir = gpg_home.temp_path().join("password-store");
+        fs::create_dir(&password_store_dir).await.unwrap();
+        fs::write(password_store_dir.join(".gpg-id"), RECIPIENT)
+            .await
+            .unwrap();
+
+        let pass = PasswordStore::for_test(password_store_dir.clone(), gpg_home.path());
+        let store = RedbSecretStore::new(&pass).await.unwrap();
+        let collection_id = Arc::new(
+            store
+                .create_collection(Some("test".into()), None)
+                .await
+                .unwrap(),
+        );
+        let attributes = HashMap::from([
+            ("application".to_owned(), "regression-test".to_owned()),
+            ("account".to_owned(), "example".to_owned()),
+        ]);
+        let secret_id = Arc::new(
+            store
+                .create_secret(
+                    collection_id.clone(),
+                    Some("Secret label".into()),
+                    b"secret value".to_vec(),
+                    Arc::new(attributes.clone()),
+                )
+                .await
+                .unwrap(),
+        );
+        let secret_file = password_store_dir
+            .join(PASS_SUBDIR)
+            .join(&*collection_id)
+            .join(format!("{secret_id}.gpg"));
+
+        assert!(secret_file.exists());
+        assert_eq!(
+            store
+                .get_secret_label(collection_id.clone(), secret_id.clone())
+                .await
+                .unwrap(),
+            "Secret label"
+        );
+        assert_eq!(
+            store
+                .read_secret_attrs(collection_id.clone(), secret_id.clone())
+                .await
+                .unwrap(),
+            attributes
+        );
+        for (key, value) in &attributes {
+            let matching_ids = store
+                .search_collection(
+                    collection_id.clone(),
+                    Arc::new(HashMap::from([(key.clone(), value.clone())])),
+                )
+                .await
+                .unwrap();
+            assert!(matching_ids.contains(secret_id.as_ref()));
+        }
+
+        store
+            .delete_secret(collection_id.clone(), secret_id.clone())
+            .await
+            .unwrap();
+
+        assert!(!secret_file.exists());
+        assert!(store
+            .search_collection(collection_id.clone(), Arc::new(attributes.clone()))
+            .await
+            .unwrap()
+            .is_empty());
+
+        drop(store);
+
+        let attributes_db = password_store_dir
+            .join(PASS_SUBDIR)
+            .join(&*collection_id)
+            .join(ATTRIBUTES_DB);
+        let db = Database::open(attributes_db).unwrap();
+        let tx = db.begin_read().unwrap();
+        let labels = tx.open_table(LABELS_TABLE).unwrap();
+        let attributes_reverse = tx.open_table(ATTRIBUTES_TABLE_REVERSE).unwrap();
+        let attributes_table = tx.open_multimap_table(ATTRIBUTES_TABLE).unwrap();
+
+        assert!(ReadableTable::get(&labels, secret_id.as_str())
+            .unwrap()
+            .is_none());
+        assert!(ReadableTable::get(&attributes_reverse, secret_id.as_str())
+            .unwrap()
+            .is_none());
+        for (key, value) in &attributes {
+            assert!(
+                !ReadableMultimapTable::get(&attributes_table, (key.as_str(), value.as_str()),)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().value() == secret_id.as_str())
+                    .any(|matches| matches)
+            );
+        }
     }
 }

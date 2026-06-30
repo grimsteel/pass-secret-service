@@ -26,6 +26,16 @@ pub struct PasswordStore {
 }
 
 impl PasswordStore {
+    #[cfg(test)]
+    pub(crate) fn for_test(directory: PathBuf, gpg_home: &Path) -> Self {
+        Self {
+            directory,
+            gpg_opts: Some(format!("--homedir={}", gpg_home.display())),
+            file_mode: 0o600,
+            dir_mode: 0o700,
+        }
+    }
+
     /// Initialize this PasswordStore instance from env vars
     pub fn from_env(password_store_dir: Option<PathBuf>) -> Result<Self> {
         let mut env: HashMap<String, String> = env::vars().collect();

@@ -107,10 +107,8 @@ impl DhIetf1024Sha256Aes128CbcPkcs7Transfer {
         let client_pub_key = BigUint::from_bytes_be(client_pub_key);
 
         // client pubkey ^ priv key % dh prime
-        let shared_secret = to_bytes_be_padded(
-            &client_pub_key.modpow(&priv_key, dh_prime),
-            DH_PRIME_BYTES,
-        );
+        let shared_secret =
+            to_bytes_be_padded(&client_pub_key.modpow(&priv_key, dh_prime), DH_PRIME_BYTES);
 
         // no salt
         let hk = Hkdf::<Sha256>::new(None, &shared_secret[..]);
@@ -172,7 +170,10 @@ mod tests {
     #[test]
     fn pad_preserves_full_width_value() {
         let n = BigUint::from_bytes_be(&[0xAAu8; DH_PRIME_BYTES]);
-        assert_eq!(to_bytes_be_padded(&n, DH_PRIME_BYTES), vec![0xAA; DH_PRIME_BYTES]);
+        assert_eq!(
+            to_bytes_be_padded(&n, DH_PRIME_BYTES),
+            vec![0xAA; DH_PRIME_BYTES]
+        );
     }
 
     #[test]
