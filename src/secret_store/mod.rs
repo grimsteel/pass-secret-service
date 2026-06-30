@@ -13,8 +13,6 @@ use crate::{error::Result, pass::PasswordStore};
 
 pub mod redb;
 mod redb_imps;
-#[cfg(test)]
-pub(crate) use redb_imps::RedbHashMap;
 //mod json;
 
 pub const PASS_SUBDIR: &'static str = "secret-service";
